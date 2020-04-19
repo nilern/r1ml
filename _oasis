@@ -14,6 +14,7 @@ Executable "interpreter"
     Path: src
     MainIs: main.ml
     CompiledObject: best
+    BuildDepends: linenoise
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild
