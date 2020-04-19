@@ -1,0 +1,21 @@
+Name: R1ML
+Version: 0.1.0
+Synopsis: Recursive first-class modules prototype for master's thesis
+Authors: pauli.jaakkola@iki.fi
+License: MIT
+
+SourceRepository master
+    Type: git
+    Location: https://github.com/nilern/r1ml.git
+    Branch: master
+    Browser: https://github.com/nilern/r1ml
+
+Executable "interpreter"
+    Path: src
+    MainIs: main.ml
+    CompiledObject: best
+
+OASISFormat: 0.4
+BuildTools: ocamlbuild
+Plugins: META (0.4), DevFiles (0.4)
+
