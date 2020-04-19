@@ -10,13 +10,22 @@ SourceRepository master
     Branch: master
     Browser: https://github.com/nilern/r1ml
 
+XOcamlbuildExtraArgs: -use-menhir
+
 Executable "interpreter"
+    CompiledObject: best
+    BuildDepends: r1ml, linenoise
     Path: src
     MainIs: main.ml
+
+Library "r1ml"
     CompiledObject: best
-    BuildDepends: linenoise
+    Path: src
+    Modules: R1MLParser
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild
 Plugins: META (0.4), DevFiles (0.4)
+
+AlphaFeatures: ocamlbuild_more_args
 
