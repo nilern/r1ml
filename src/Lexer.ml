@@ -2,14 +2,24 @@ open SedlexMenhir
 
 open Parser
 
-let digit = [%sedlex.regexp? '0' .. '9']
+let initial = [%sedlex.regexp? '_' | alphabetic]
+let constituent = [%sedlex.regexp? initial | '0'..'9']
+let identifier = [%sedlex.regexp? initial, Star constituent]
 
-let integer = [%sedlex.regexp? Plus digit]
+let integer = [%sedlex.regexp? Plus ('0'..'9')]
 
 let rec token ({stream; _} as lexbuf) =
     match%sedlex stream with
+    | "val" -> update lexbuf; VAL
+
+    | ':' -> update lexbuf; COLON
+    | '=' -> update lexbuf; EQ
     | ';' -> update lexbuf; SEMI
 
+    | '{' -> update lexbuf; LBRACE
+    | '}' -> update lexbuf; RBRACE
+
+    | identifier -> update lexbuf; ID (lexeme lexbuf)
     | integer -> update lexbuf; CONST (int_of_string (lexeme lexbuf))
 
     | Plus (Chars " \t\r") -> update lexbuf; token lexbuf 

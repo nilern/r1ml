@@ -1,8 +1,11 @@
 %{ open Ast %}
 
 %token
-    SEMI ";"
+    VAL "val"
+    COLON ":" EQ "=" SEMI ";"
+    LBRACE "{" RBRACE "}"
     EOF
+%token <string> ID
 %token <int> CONST
 
 %start <Ast.stmt list> stmts
@@ -11,9 +14,31 @@
 
 stmts : separated_list(";", stmt) EOF { $1 }
 
-stmt : expr { Expr $1 }
+stmt
+    : "val" pat=ID ann=ann "=" expr=expr {
+        Val (($symbolstartpos, $endpos), {pat = Name.of_string pat; ann}, expr)
+    }
+    | expr { Expr $1 }
 
 expr : atom { {pos = ($symbolstartpos, $endpos); expr = $1} }
 
-atom : CONST { Const $1 }
+atom
+    : ID {
+        if $1.[0] = '_' && $1.[1] = '_' then
+            match $1 with
+            | "__int" -> Type Int
+            | _ -> failwith ("nonexistent intrinsic " ^ $1)
+        else Use (Name.of_string $1)
+    }
+    | CONST { Const $1 }
+
+ann
+    : ":" typ=typ { Some typ }
+    | { None }
+
+decl : "val" name=ID ":" typ=typ { {name = Name.of_string name; typ} }
+
+typ
+    : "{" decls=decl* "}" { Record decls }
+    | expr { Path $1 }
 
