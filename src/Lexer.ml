@@ -1,9 +1,20 @@
+open SedlexMenhir
+
 open Parser
 
-let integer = [%sedlex.regexp? '0' .. '9']
+let digit = [%sedlex.regexp? '0' .. '9']
 
-let token lexbuf =
-    match%sedlex lexbuf with
-    | ';' -> SEMI
-    | _ -> failwith "unimplemented"
+let integer = [%sedlex.regexp? Plus digit]
+
+let rec token ({stream; _} as lexbuf) =
+    match%sedlex stream with
+    | ';' -> update lexbuf; SEMI
+
+    | integer -> update lexbuf; CONST (int_of_string (lexeme lexbuf))
+
+    | Plus (Chars " \t\r") -> update lexbuf; token lexbuf 
+    | '\n' -> update lexbuf; new_line lexbuf; token lexbuf
+    | eof -> update lexbuf; EOF
+
+    | _ -> raise_ParseError lexbuf
 
