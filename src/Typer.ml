@@ -16,7 +16,7 @@ module Env = struct
         | [] -> raise TypeError
 end
 
-let rec kindof env = function
+let rec kindcheck env = function
     | Ast.Path expr ->
         (match typeof env expr with
         | {expr = _; typ = Type typ; eff = Pure} -> typ
@@ -25,7 +25,7 @@ let rec kindof env = function
 
 and typeof env = function
     | Ast.Type {v = typ; _} ->
-        let typ = kindof env typ in
+        let typ = kindcheck env typ in
         {expr = Proxy typ; typ = Type typ; eff = Pure}
     | Ast.Use name ->
         let ({typ; _} as def) : def = Env.get env name in

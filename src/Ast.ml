@@ -7,7 +7,7 @@ type def = {pat : Name.t; ann: typ with_pos option}
 and effect = Pure | Impure
 
 and typ
-    = Record of decl list
+    = Sig of decl list
     | Path of expr
     | Int
 
@@ -26,7 +26,7 @@ let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
 
 let rec typ_to_doc = function
-    | Record decls ->
+    | Sig decls ->
         PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.semi ^^ PPrint.break 1) PPrint.rbrace
             decl_to_doc decls

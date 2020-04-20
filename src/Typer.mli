@@ -4,6 +4,6 @@ module Env : sig
     type t
 end
 
-val kindof : Env.t -> Ast.typ -> FcType.t
+val kindcheck : Env.t -> Ast.typ -> FcType.t
 val typeof : Env.t -> Ast.expr -> typing
 

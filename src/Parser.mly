@@ -39,6 +39,6 @@ ann
 decl : "val" name=ID ":" typ=typ { {name = Name.of_string name; typ} }
 
 typ
-    : "{" decls=decl* "}" { {v = Record decls; pos = ($symbolstartpos, $endpos)} }
+    : "{" decls=decl* "}" { {v = Sig decls; pos = ($symbolstartpos, $endpos)} }
     | expr { {$1 with v = Path $1.v} }
 
