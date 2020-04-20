@@ -1,17 +1,19 @@
+%{ open Ast %}
+
 %token
     SEMI ";"
     EOF
 %token <int> CONST
 
-%start <unit list> stmts
+%start <Ast.stmt list> stmts
 
 %%
 
 stmts : separated_list(";", stmt) EOF { List.rev $1 }
 
-stmt : expr { $1 }
+stmt : expr { Expr $1 }
 
-expr : atom { $1 }
+expr : atom { {pos = $symbolstartpos; expr = $1} }
 
-atom : CONST { () }
+atom : CONST { Const $1 }
 

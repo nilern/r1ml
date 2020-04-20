@@ -22,7 +22,7 @@ Library "r1ml"
     CompiledObject: best
     BuildDepends: menhirLib, sedlex.ppx
     Path: src
-    Modules: Parser, Lexer, SedlexMenhir
+    Modules: Ast, Parser, Lexer, SedlexMenhir
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild
