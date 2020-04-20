@@ -20,9 +20,9 @@ Executable "interpreter"
 
 Library "r1ml"
     CompiledObject: best
-    BuildDepends: menhirLib, sedlex.ppx
+    BuildDepends: menhirLib, sedlex.ppx, pprint
     Path: src
-    Modules: Ast, Parser, Lexer, SedlexMenhir
+    Modules: Name, Ast, Parser, Lexer, SedlexMenhir
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild
