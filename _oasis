@@ -20,8 +20,9 @@ Executable "interpreter"
 
 Library "r1ml"
     CompiledObject: best
+    BuildDepends: sedlex.ppx
     Path: src
-    Modules: R1MLParser
+    Modules: Parser, Lexer
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild
