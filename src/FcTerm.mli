@@ -1,6 +1,6 @@
 type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
-type typ = FcType.typ
+type typ = FcType.t
 
 type def = {name : Name.t; typ : typ}
 

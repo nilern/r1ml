@@ -4,6 +4,8 @@ type 'a with_pos = {v : 'a; pos: span}
 
 type def = {pat : Name.t; ann: typ with_pos option}
 
+and effect = Pure | Impure
+
 and typ
     = Record of decl list
     | Path of expr

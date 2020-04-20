@@ -1,9 +1,9 @@
-type typ
+type t
     = Record of field list
-    | Type of typ
+    | Type of t
     | Int
 
-and field = {label : string; typ : typ}
+and field = {label : string; typ : t}
 
-val to_doc : typ -> PPrint.document
+val to_doc : t -> PPrint.document
 
