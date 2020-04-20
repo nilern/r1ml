@@ -1,25 +1,24 @@
-type pos = Lexing.position
-type span = pos * pos
+type span = Lexing.position * Lexing.position
 
-type def = {pat : Name.t; ann: typ option}
+type 'a with_pos = {v : 'a; pos: span}
+
+type def = {pat : Name.t; ann: typ with_pos option}
 
 and typ
     = Record of decl list
-    | Path of pos_expr
+    | Path of expr
     | Int
 
-and decl = {name : Name.t; typ: typ}
+and decl = {name : Name.t; typ : typ with_pos}
 
 and expr
-    = Type of typ
+    = Type of typ with_pos
     | Use of Name.t
     | Const of int
 
-and pos_expr = {expr : expr; pos : span}
-
 and stmt
-    = Val of span * def * pos_expr
-    | Expr of pos_expr
+    = Val of span * def * expr with_pos
+    | Expr of expr with_pos
 
 val def_to_doc : def -> PPrint.document
 val typ_to_doc : typ -> PPrint.document

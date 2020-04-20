@@ -20,13 +20,13 @@ stmt
     }
     | expr { Expr $1 }
 
-expr : atom { {pos = ($symbolstartpos, $endpos); expr = $1} }
+expr : atom { {v = $1; pos = ($symbolstartpos, $endpos)} }
 
 atom
     : ID {
         if $1.[0] = '_' && $1.[1] = '_' then
             match $1 with
-            | "__int" -> Type Int
+            | "__int" -> Type {v = Int; pos = ($symbolstartpos, $endpos)}
             | _ -> failwith ("nonexistent intrinsic " ^ $1)
         else Use (Name.of_string $1)
     }
@@ -39,6 +39,6 @@ ann
 decl : "val" name=ID ":" typ=typ { {name = Name.of_string name; typ} }
 
 typ
-    : "{" decls=decl* "}" { Record decls }
-    | expr { Path $1 }
+    : "{" decls=decl* "}" { {v = Record decls; pos = ($symbolstartpos, $endpos)} }
+    | expr { {$1 with v = Path $1.v} }
 
