@@ -55,6 +55,10 @@ and domain_to_doc = function
     | {name = None; typ = {v = Pi _ as typ; _}} -> PPrint.parens (typ_to_doc typ)
     | {name = None; typ} -> typ_to_doc typ.v
 
+and effect_to_doc = function
+    | Pure -> PPrint.string "pure"
+    | Impure -> PPrint.string "impure"
+
 and effect_arrow = function
     | Pure -> PPrint.string "=>"
     | Impure -> PPrint.string "->"
@@ -97,7 +101,7 @@ and selectee_to_doc = function
     | callee -> expr_to_doc callee
 
 and def_to_doc (_, def, {v = expr; _}) =
-    PPrint.string "val" ^/^ lvalue_to_doc def ^/^ PPrint.equals ^/^ expr_to_doc expr
+    lvalue_to_doc def ^/^ PPrint.equals ^/^ expr_to_doc expr
 
 let stmt_to_doc = function
     | Def def -> def_to_doc def
