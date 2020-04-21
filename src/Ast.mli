@@ -15,6 +15,7 @@ and typ
     | Singleton of expr with_pos
     | Type
     | Int
+    | Bool
 
 and decl = {name : Name.t; typ : typ with_pos}
 

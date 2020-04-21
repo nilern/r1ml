@@ -6,7 +6,7 @@ module Env : sig
     val interactive : unit -> t
 end
 
-val kindcheck : Env.t -> Ast.typ Ast.with_pos -> FcType.t
+val kindcheck : Env.t -> Ast.typ Ast.with_pos -> FcType.abs
 val typeof : Env.t -> Ast.expr Ast.with_pos -> FcTerm.expr Ast.with_pos typing
 val check_interaction : Env.t -> Ast.stmt -> FcTerm.stmt typing
 

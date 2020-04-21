@@ -15,6 +15,7 @@ and typ
     | Singleton of expr with_pos
     | Type
     | Int
+    | Bool
 
 and decl = {name : Name.t; typ : typ with_pos}
 
@@ -48,6 +49,7 @@ let rec typ_to_doc = function
     | Singleton {v = expr; _} -> PPrint.parens (PPrint.equals ^/^ expr_to_doc expr)
     | Type -> PPrint.string "type"
     | Int -> PPrint.string "__int"
+    | Bool -> PPrint.string "__bool"
 
 and domain_to_doc = function
     | {name = Some name; typ} ->

@@ -1,13 +1,15 @@
 type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
 type typ = FcType.t
+type abs = FcType.abs
 
 type lvalue = {name : Name.t; typ : typ}
 
 type expr
     = Fn of lvalue * expr with_pos
+    | If of expr with_pos * expr with_pos * expr with_pos
     | App of expr with_pos * expr with_pos
-    | Proxy of typ
+    | Proxy of abs
     | Use of lvalue
     | Const of int
 
@@ -24,10 +26,25 @@ module Type = FcType
 
 let lvalue_to_doc {name; typ} = Name.to_doc name ^/^ PPrint.colon ^/^ Type.to_doc typ
 
-let expr_to_doc = function
-    | Proxy typ -> PPrint.brackets (Type.to_doc typ)
+let rec expr_to_doc = function
+    | Fn (param, body) ->
+        PPrint.string "fun" ^/^ lvalue_to_doc param ^/^ PPrint.string "=>" ^/^ expr_to_doc body.v
+    | If (cond, conseq, alt) ->
+        PPrint.string "if" ^/^ expr_to_doc cond.v
+            ^/^ PPrint.string "then" ^/^ expr_to_doc conseq.v
+            ^/^ PPrint.string "else" ^/^ expr_to_doc alt.v
+    | App (callee, arg) -> callee_to_doc callee.v ^/^ arg_to_doc arg.v
+    | Proxy typ -> PPrint.brackets (Type.abs_to_doc typ)
     | Use {name; _} -> Name.to_doc name
     | Const v -> PPrint.string (Int.to_string v)
+
+and callee_to_doc = function
+    | Fn _ as callee -> PPrint.parens (expr_to_doc callee)
+    | callee -> expr_to_doc callee
+
+and arg_to_doc = function
+    | (Fn _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
+    | arg -> expr_to_doc arg
 
 let def_to_doc ((_, lvalue, {v = expr; _}) : def) =
     PPrint.group (lvalue_to_doc lvalue ^/^ PPrint.equals ^/^ expr_to_doc expr)

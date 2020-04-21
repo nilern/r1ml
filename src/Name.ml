@@ -13,5 +13,5 @@ let of_string str = String str
 
 let to_doc = function
     | String s -> PPrint.string s
-    | Fresh n -> PPrint.string ("$" ^ Int.to_string n)
+    | Fresh n -> PPrint.string ("__" ^ Int.to_string n)
 

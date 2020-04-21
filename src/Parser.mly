@@ -49,6 +49,7 @@ atom
         if $1.[0] = '_' && $1.[1] = '_' then
             match $1 with
             | "__int" -> Proxy {v = Int; pos = $sloc}
+            | "__bool" -> Proxy {v = Bool; pos = $sloc}
             | _ -> failwith ("nonexistent intrinsic " ^ $1)
         else Use (Name.of_string $1)
     }
