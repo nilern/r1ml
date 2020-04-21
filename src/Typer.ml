@@ -24,7 +24,7 @@ let rec kindcheck env = function
     | Ast.Int -> Int
 
 and typeof env = function
-    | Ast.Type {v = typ; _} ->
+    | Ast.Proxy {v = typ; _} ->
         let typ = kindcheck env typ in
         {expr = Proxy typ; typ = Type typ; eff = Pure}
     | Ast.Use name ->

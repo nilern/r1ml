@@ -2,24 +2,36 @@ type span = Lexing.position * Lexing.position
 
 type 'a with_pos = {v : 'a; pos: span}
 
-type def = {pat : Name.t; ann: typ with_pos option}
+type domain = {name : Name.t option; typ : typ with_pos}
+
+and lvalue = {pat : Name.t; ann: typ with_pos option}
 
 and effect = Pure | Impure
 
 and typ
-    = Sig of decl list
+    = Pi of domain * effect * typ with_pos
+    | Sig of decl list
     | Path of expr
+    | Singleton of expr with_pos
+    | Type
     | Int
 
 and decl = {name : Name.t; typ : typ with_pos}
 
 and expr
-    = Type of typ with_pos
+    = Fn of lvalue * expr with_pos
+    | If of expr with_pos * expr with_pos * expr with_pos
+    | App of expr with_pos * expr with_pos
+    | Struct of def list
+    | Select of expr with_pos * Name.t
+    | Proxy of typ with_pos
     | Use of Name.t
     | Const of int
 
+and def = span * lvalue * expr with_pos
+
 and stmt
-    = Val of span * def * expr with_pos
+    = Def of def
     | Expr of expr with_pos
 
 val def_to_doc : def -> PPrint.document

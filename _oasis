@@ -10,7 +10,9 @@ SourceRepository master
     Branch: master
     Browser: https://github.com/nilern/r1ml
 
-XOcamlbuildExtraArgs: -use-menhir
+XOcamlbuildExtraArgs:
+    -use-menhir
+    -yaccflag --explain
 
 Executable "interpreter"
     CompiledObject: best
