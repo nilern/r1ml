@@ -1,3 +1,7 @@
+type kind
+    = ArrowK of kind * kind
+    | TypeK
+
 type t
     = Record of field list
     | Type of t
@@ -7,6 +11,11 @@ and field = {label : string; typ : t}
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
+
+let rec kind_to_doc = function
+    | ArrowK (domain, codomain) ->
+        kind_to_doc domain ^/^ PPrint.string "->" ^/^ kind_to_doc codomain
+    | TypeK -> PPrint.star
 
 let rec to_doc = function
     | Record fields ->
