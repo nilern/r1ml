@@ -8,23 +8,57 @@ exception TypeError
 module Env = struct
     type scope
         = Repl of (Name.t, lvalue) Hashtbl.t
+        | Existential of binding list ref * level
         | Fn of lvalue 
 
-    type t = scope list
+    type t = {scopes : scope list; current_level : level ref}
 
-    let interactive () = [Repl (Hashtbl.create 0)]
+    let initial_level = 1
 
-    let repl_define env ({name; _} as binding) = match env with
-        | Repl kvs :: _ -> Hashtbl.replace kvs name binding
-        | _ -> failwith "Typer.Env.repl_define: non-interactive type environment"
+    let interactive () =
+        { scopes = [Repl (Hashtbl.create 0); Existential (ref [], initial_level)]
+        ; current_level = ref initial_level }
 
-    let rec get env name = match env with
-        | Repl kvs :: env' -> begin match Hashtbl.find_opt kvs name with
-            | Some def -> def
-            | None -> get env' name
-        end
-        | Fn ({name = name'; _} as def) :: env' -> if name' = name then def else get env' name
-        | [] -> raise TypeError
+    let repl_define env ({name; _} as binding) =
+        let rec define scopes =
+            match scopes with
+            | Repl kvs :: _ -> Hashtbl.replace kvs name binding
+            | _ :: scopes' -> define scopes'
+            | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
+        in define env.scopes
+
+    let with_incremented_level {current_level; _} body =
+        current_level := !current_level + 1;
+        Fun.protect body
+            ~finally:(fun () -> current_level := !current_level - 1)
+
+    let with_existential ({scopes; current_level} as env) f =
+        with_incremented_level env (fun () ->
+            let bindings = ref [] in
+            f {env with scopes = Existential (bindings, !current_level) :: scopes} bindings
+        )
+
+    let generate env binding =
+        let rec generate = function
+            | Existential (bindings, level) :: _ ->
+                bindings := binding :: !bindings;
+                (binding, level)
+            | _ :: scopes' -> generate scopes'
+            | [] -> failwith "Typer.Env.generate: missing root Existential scope"
+        in generate env.scopes
+
+    let get env name =
+        let rec get scopes name =
+            match scopes with
+            | Repl kvs :: scopes' ->
+                (match Hashtbl.find_opt kvs name with
+                | Some def -> def
+                | None -> get scopes' name)
+            | Fn ({name = name'; _} as def) :: scopes' ->
+                if name' = name then def else get scopes' name
+            | Existential _ :: scopes' -> get scopes' name
+            | [] -> raise TypeError
+        in get env.scopes name
 end
 
 (* # Effects *)
@@ -33,18 +67,9 @@ let join_effs eff eff' = match (eff, eff') with
     | (Ast.Pure, Ast.Pure) -> Ast.Pure
     | _ -> Impure
 
-(* # Type Elaboration *)
-
-let rec kindcheck env (typ : Ast.typ Ast.with_pos) = match typ.v with
-    | Ast.Path expr ->
-        (match typeof env {Ast.v = expr; pos = typ.pos} with
-        | {term = _; typ = Type typ; eff = Pure} -> typ
-        | _ -> raise TypeError)
-    | Ast.Int -> ([], Int)
-
 (* # Expressions *)
 
-and typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
+let rec typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
@@ -57,8 +82,8 @@ and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
     let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr Ast.with_pos) =
         let {term; typ = expr_typ; eff} = typeof env expr in
         let coerce = subtype expr.pos true env expr_typ typ in
-        {term = {expr with v = App ({v = coerce; pos = expr.pos}, term)}; typ; eff} in
-
+        {term = {expr with v = App ({v = coerce; pos = expr.pos}, term)}; typ; eff}
+    in
     let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
         match expr.v with
         | Ast.If (cond, conseq, alt) ->
@@ -72,8 +97,8 @@ and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
             (match params with
             | _ :: _ -> failwith "todo: create axioms"
             | [] -> ());
-            check_concrete_unconditional env body expr in
-
+            check_concrete_unconditional env body expr
+    in
     (match params with
     | _ :: _ -> failwith "todo: hoist abstract types"
     | [] -> ());
@@ -89,6 +114,34 @@ and deftype env : Ast.def -> def typing = function
     | (pos, {Ast.pat = name; ann = None}, expr) ->
         let {term = expr; typ; eff} = typeof env expr in
         {term = (pos, {name; typ}, expr); typ; eff}
+
+(* # Type Elaboration *)
+
+and kindcheck env (typ : Ast.typ Ast.with_pos) =
+    let rec elaborate env (typ : Ast.typ Ast.with_pos) =
+        match typ.v with
+        | Ast.Path expr ->
+            (match typeof env {typ with v = expr} with
+            | {term = _; typ = Type (params, typ); eff = Pure} ->
+                (* FIXME: capture-avoiding substitution: *)
+                List.iter (fun param -> ignore (Env.generate env param)) params;
+                typ
+            | _ -> raise TypeError)
+        | Ast.Singleton expr ->
+            (match typeof env expr with
+            | {term = _; typ; eff = Pure} -> typ
+            | _ -> raise TypeError)
+        | Ast.Type ->
+            let binding = (Name.fresh (), TypeK) in
+            let ov = Env.generate env binding in
+            Type ([], Ov ov)
+        | Ast.Int -> Int
+        | Ast.Bool -> Bool
+    in
+    Env.with_existential env (fun env params ->
+        let typ = elaborate env typ in
+        (!params, typ)
+    )
 
 (* # Subtyping *)
 

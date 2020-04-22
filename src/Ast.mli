@@ -36,6 +36,7 @@ and stmt
     | Expr of expr with_pos
 
 val effect_to_doc : effect -> PPrint.document
+val effect_arrow : effect -> PPrint.document
 val def_to_doc : def -> PPrint.document
 val typ_to_doc : typ -> PPrint.document
 val decl_to_doc : decl -> PPrint.document

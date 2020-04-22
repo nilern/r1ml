@@ -84,6 +84,7 @@ typ_nestable : typ_nestable_impl { {v = Proxy {v = $1; pos = $sloc}; pos = $sloc
 
 typ_nestable_impl
     : "{" decls=separated_list(";", decl) "}" { Sig decls }
+    | "type" { Type }
     | "(" typ ")" { $2.v }
     | common_nestable { Path $1 }
 
