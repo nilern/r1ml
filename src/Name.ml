@@ -20,8 +20,17 @@ let freshen name =
 
 let of_string str = String str
 
+let compare = compare
+
 let to_doc = function
     | String s -> PPrint.string s
     | Fresh n -> PPrint.string ("__" ^ Int.to_string n)
     | Fring (s, n) -> PPrint.string (s ^ "__" ^ Int.to_string n)
+
+type name = t
+
+module Map = Map.Make(struct
+    type t = name
+    let compare = compare
+end)
 

@@ -24,11 +24,12 @@ let (^/^) = PPrint.(^/^)
 
 module Type = FcType
 
-let lvalue_to_doc {name; typ} = Name.to_doc name ^/^ PPrint.colon ^/^ Type.to_doc typ
+let lvalue_to_doc {name; typ} =
+    PPrint.infix 4 1 PPrint.colon (Name.to_doc name) (Type.to_doc typ)
 
 let rec expr_to_doc = function
-    | Fn (param, body) ->
-        PPrint.string "fun" ^/^ lvalue_to_doc param ^/^ PPrint.string "=>" ^/^ expr_to_doc body.v
+    | Fn (param, body) -> PPrint.infix 4 1 (PPrint.string "=>")
+        (PPrint.group (PPrint.string "fun" ^/^ lvalue_to_doc param)) (expr_to_doc body.v)
     | If (cond, conseq, alt) ->
         PPrint.string "if" ^/^ expr_to_doc cond.v
             ^/^ PPrint.string "then" ^/^ expr_to_doc conseq.v
@@ -47,7 +48,7 @@ and arg_to_doc = function
     | arg -> expr_to_doc arg
 
 let def_to_doc ((_, lvalue, {v = expr; _}) : def) =
-    PPrint.group (lvalue_to_doc lvalue ^/^ PPrint.equals ^/^ expr_to_doc expr)
+    PPrint.infix 4 1 PPrint.equals (lvalue_to_doc lvalue) (expr_to_doc expr)
 
 let stmt_to_doc = function
     | Def def -> def_to_doc def

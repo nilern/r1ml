@@ -10,15 +10,20 @@ type binding = Name.t * kind
 
 type ov = binding * level
 
-type uvv
-    = Unassigned of binding * level
-    | Assigned of t
+type uvv =
+    | Unassigned of binding * level
+    | Assigned of unq
 
 and uv = uvv ref
 
-and t
-    = Fn of binding list * t * effect * abs
+and abs = binding list * t
+
+and t = binding list * unq
+
+and unq =
+    | Arrow of t * effect * abs
     | Record of field list
+    | App of t * t
     | Type of abs
     | Use of binding
     | Ov of ov
@@ -28,42 +33,58 @@ and t
 
 and field = {label : string; typ : t}
 
-and abs = binding list * t
-
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
 
 let rec kind_to_doc = function
     | ArrowK (domain, codomain) ->
-        kind_to_doc domain ^/^ PPrint.string "->" ^/^ kind_to_doc codomain
+        PPrint.prefix 4 1 (domain_kind_to_doc domain)
+            (PPrint.string "->" ^^ PPrint.blank 1 ^^ kind_to_doc codomain)
     | TypeK -> PPrint.star
 
-let rec to_doc = function
-    | Fn (tparams, domain, eff, codomain) ->
-        let params_doc = match tparams with
-            | _ :: _ ->
-                PPrint.string "forall" ^/^ bindings_to_doc tparams ^/^ PPrint.dot ^^ PPrint.break 1
-            | [] -> PPrint.empty in
-        params_doc ^^ domain_to_doc domain ^/^ Ast.effect_arrow eff ^/^ abs_to_doc codomain
+and domain_kind_to_doc domain = match domain with
+    | ArrowK _ -> PPrint.parens (kind_to_doc domain)
+    | _ -> kind_to_doc domain
+
+let rec abs_to_doc = function
+    | ([], body) -> to_doc body
+    | (params, body) ->
+        PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc params))
+            (PPrint.dot ^^ PPrint.blank 1 ^^ to_doc body)
+
+and to_doc = function
+    | ([], body) -> unq_to_doc body
+    | (params, body) ->
+        PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc params))
+            (PPrint.dot ^^ PPrint.blank 1 ^^ unq_to_doc body)
+
+and unq_to_doc = function
+    | Arrow (domain, eff, codomain) ->
+        PPrint.prefix 4 1 (domain_to_doc domain) 
+            (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
     | Record fields ->
         PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc fields
-    | Type typ -> PPrint.brackets (PPrint.equals ^/^ abs_to_doc typ)
+    | App (callee, arg) -> PPrint.group (callee_to_doc callee ^/^ arg_to_doc arg)
+    | Type typ -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ abs_to_doc typ)
     | Use (name, _) -> Name.to_doc name
     | Ov ((name, _), _) -> Name.to_doc name
     | Uv uv -> uv_to_doc uv
     | Int -> PPrint.string "__int"
     | Bool -> PPrint.string "__bool"
 
-and abs_to_doc = function
-    | ([], body) -> to_doc body
-    | (params, body) ->
-        PPrint.string "exists" ^/^ bindings_to_doc params ^/^ PPrint.dot ^/^ to_doc body
+and domain_to_doc domain = match domain with
+    | ((_ :: _, _) | ([], Arrow _)) -> PPrint.parens (to_doc domain)
+    | ([], _) -> to_doc domain
 
-and domain_to_doc = function
-    | Fn _ as domain -> PPrint.parens (to_doc domain)
-    | domain -> to_doc domain
+and callee_to_doc callee = match callee with
+    | ((_ :: _, _) | ([], Arrow _)) -> PPrint.parens (to_doc callee)
+    | ([], _) -> to_doc callee
+
+and arg_to_doc callee = match callee with
+    | ((_ :: _, _) | ([], (Arrow _ | App _))) -> PPrint.parens (to_doc callee)
+    | ([], _) -> to_doc callee
 
 and field_to_doc {label; typ} =
     PPrint.string label ^/^ PPrint.colon ^/^ to_doc typ
@@ -75,7 +96,31 @@ and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_d
 
 and uv_to_doc uv = match !uv with
     | Unassigned ((name, _), _) -> PPrint.qmark ^^ Name.to_doc name
-    | Assigned t -> to_doc t
+    | Assigned t -> unq_to_doc t
 
 let freshen (name, kind) = (Name.freshen name, kind)
+
+let rec substitute_abs substitution (params, body) =
+    let substitution =
+        List.fold_left (fun substitution (name, _) -> Name.Map.remove name substitution)
+                       substitution params
+    in (params, substitute substitution body)
+
+and substitute substitution (params, body) =
+    let substitution =
+        List.fold_left (fun substitution (name, _) -> Name.Map.remove name substitution)
+                       substitution params
+    in (params, substitute_unq substitution body)
+
+and substitute_unq substitution = function
+    | App (callee, arg) -> App (substitute substitution callee, substitute substitution arg)
+    | Arrow (domain, eff, codomain) ->
+        Arrow (substitute substitution domain, eff, substitute_abs substitution codomain)
+    | Record fields ->
+        Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
+    | Type typ -> Type (substitute_abs substitution typ)
+    | (Use (name, _) | Ov ((name, _), _)) as typ ->
+        Option.value (Name.Map.find_opt name substitution) ~default: typ
+    | Uv {contents = Assigned typ} -> substitute_unq substitution typ
+    | (Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
 

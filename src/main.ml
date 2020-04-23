@@ -7,8 +7,8 @@ let ep env stmts =
     let step stmt =
         let {term; typ; eff} : FcTerm.stmt Typer.typing = Typer.check_interaction env stmt in
         PPrint.ToChannel.pretty 1.0 80 stdout (FcTerm.stmt_to_doc term ^^ PPrint.hardline);
-        let doc = PPrint.group (PPrint.colon ^/^ FcType.to_doc typ
-            ^/^ PPrint.bang ^/^ Ast.effect_to_doc eff) in
+        let doc = PPrint.group (PPrint.group (PPrint.colon ^/^ FcType.to_doc typ)
+            ^/^ PPrint.group (PPrint.bang ^/^ Ast.effect_to_doc eff)) in
         PPrint.ToChannel.pretty 1.0 80 stdout doc in
     List.iter step stmts
 

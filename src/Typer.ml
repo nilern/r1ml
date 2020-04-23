@@ -9,6 +9,7 @@ module Env = struct
     type scope
         = Repl of (Name.t, lvalue) Hashtbl.t
         | Existential of binding list ref * level
+        | Universal of ov list
         | Fn of lvalue 
 
     type t = {scopes : scope list; current_level : level ref}
@@ -47,6 +48,19 @@ module Env = struct
             | [] -> failwith "Typer.Env.generate: missing root Existential scope"
         in generate env.scopes
 
+    let skolemizing_domain ({scopes; current_level} as env) (existentials, domain) f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let skolems = List.map (fun binding -> (binding, level)) existentials in
+            let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty skolems in
+            f {env with scopes = Universal skolems :: scopes}
+              (substitute substitution domain)
+        )
+
+    let push_domain env binding = {env with scopes = Fn binding :: env.scopes}
+
     let get env name =
         let rec get scopes name =
             match scopes with
@@ -56,7 +70,7 @@ module Env = struct
                 | None -> get scopes' name)
             | Fn ({name = name'; _} as def) :: scopes' ->
                 if name' = name then def else get scopes' name
-            | Existential _ :: scopes' -> get scopes' name
+            | (Existential _ | Universal _) :: scopes' -> get scopes' name
             | [] -> raise TypeError
         in get env.scopes name
 end
@@ -72,11 +86,11 @@ let join_effs eff eff' = match (eff, eff') with
 let rec typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
-        {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
+        {term = {expr with v = Proxy typ}; typ = ([], Type typ); eff = Pure}
     | Ast.Use name ->
         let ({typ; _} as def) : lvalue = Env.get env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
-    | Ast.Const c -> {term = {expr with v = Const c}; typ = Int; eff = Pure}
+    | Ast.Const c -> {term = {expr with v = Const c}; typ = ([], Int); eff = Pure}
 
 and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
     let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr Ast.with_pos) =
@@ -87,7 +101,7 @@ and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
     let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
         match expr.v with
         | Ast.If (cond, conseq, alt) ->
-            let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
+            let {term = cond; eff = cond_eff} = check env ([], ([], Bool)) cond in
             let {term = conseq; eff = conseq_eff} = implement env typ conseq in
             let {term = alt; eff = alt_eff} = implement env typ alt in
             { term = {expr with v = If (cond, conseq, alt)}
@@ -118,25 +132,53 @@ and deftype env : Ast.def -> def typing = function
 (* # Type Elaboration *)
 
 and kindcheck env (typ : Ast.typ Ast.with_pos) =
+    let reabstract env (params, body) =
+        let substitution = List.fold_left (fun substitution ((name, _) as param) ->
+            let skolem = Env.generate env (freshen param) in
+            Name.Map.add name (Ov skolem) substitution
+        ) Name.Map.empty params
+        in substitute substitution body
+    in
     let rec elaborate env (typ : Ast.typ Ast.with_pos) =
         match typ.v with
+        | Ast.Pi ({name; typ = domain}, eff, codomain) ->
+            let (universals, _) as domain = kindcheck env domain in
+            Env.skolemizing_domain env domain (fun env domain ->
+                let name = match name with
+                    | Some name -> name
+                    | None -> Name.fresh () in
+                let env = Env.push_domain env {name; typ = domain} in
+                let (existentials, _) as codomain = kindcheck env codomain in
+                match eff with
+                | Pure ->
+                    let existentials = existentials |> List.map (fun (name, kind) ->
+                        (name, List.fold_right (fun (_, arg_kind) kind -> ArrowK (arg_kind, kind))
+                                               universals kind)
+                    ) in
+                    let substitution = List.fold_left (fun substitution ((name, kind) as existential) ->
+                        let path = List.fold_left (fun path arg ->
+                            FcType.App (([], path), ([], Use arg))
+                        ) (FcType.Use existential) universals in
+                        Name.Map.add name path substitution
+                    ) Name.Map.empty existentials in
+                    let codomain = (existentials, substitute substitution (snd codomain)) in
+                    let codomain = reabstract env codomain in
+                    (universals, Arrow (domain, eff, ([], codomain)))
+                | Impure -> (universals, Arrow (domain, eff, codomain))
+            )
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
-            | {term = _; typ = Type (params, typ); eff = Pure} ->
-                (* FIXME: capture-avoiding substitution: *)
-                List.iter (fun param -> ignore (Env.generate env param)) params;
-                typ
+            | {term = _; typ = ([], Type typ); eff = Pure} -> reabstract env typ
             | _ -> raise TypeError)
         | Ast.Singleton expr ->
             (match typeof env expr with
             | {term = _; typ; eff = Pure} -> typ
             | _ -> raise TypeError)
         | Ast.Type ->
-            let binding = (Name.fresh (), TypeK) in
-            let ov = Env.generate env binding in
-            Type ([], Ov ov)
-        | Ast.Int -> Int
-        | Ast.Bool -> Bool
+            let ov = Env.generate env (Name.fresh (), TypeK) in
+            ([], Type ([], ([], Ov ov)))
+        | Ast.Int -> ([], Int)
+        | Ast.Bool -> ([], Bool)
     in
     Env.with_existential env (fun env params ->
         let typ = elaborate env typ in
@@ -146,8 +188,12 @@ and kindcheck env (typ : Ast.typ Ast.with_pos) =
 (* # Subtyping *)
 
 and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) = match (typ, super) with
+    | (([], body), ([], body')) -> subtype_unq pos occ env body body'
+
+and subtype_unq pos (occ : bool) env (typ : FcType.unq) (super : FcType.unq) =
+    match (typ, super) with
     | (Int, Int) ->
-        let lvalue = {name = Name.fresh (); typ} in
+        let lvalue = {name = Name.fresh (); typ = ([], typ)} in
         Fn (lvalue, {v = Use lvalue; pos})
 
 (* # REPL support *)
