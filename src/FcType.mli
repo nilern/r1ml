@@ -16,19 +16,15 @@ type ov = binding * level
 
 type uvv =
     | Unassigned of Name.t * level
-    | Assigned of unq
+    | Assigned of t
 
 and uv = uvv ref
 
 (* Existential (or just `t`) *)
 and abs = binding list * t
 
-(* Universal (or just `unq`) *)
-and t = binding list * unq
-
-(* Top-level unquantified (i.e. does not start with a quantifier) *)
-and unq =
-    | Arrow of t * effect * abs
+and t =
+    | Pi of binding list * t * effect * abs
     | Record of field list
     | App of t * t
     | Type of abs
@@ -41,14 +37,13 @@ and unq =
 and field = {label : string; typ : t}
 
 val kind_to_doc : kind -> PPrint.document
+val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
 val to_doc : t -> PPrint.document
-val unq_to_doc : unq -> PPrint.document
 
 val freshen : binding -> binding
 val sibling : uv -> uv
 
-val substitute_abs : unq Name.Map.t -> abs -> abs
-val substitute : unq Name.Map.t -> t -> t
-val substitute_unq : unq Name.Map.t -> unq -> unq
+val substitute_abs : t Name.Map.t -> abs -> abs
+val substitute : t Name.Map.t -> t -> t
 

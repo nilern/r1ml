@@ -50,6 +50,17 @@ module Env = struct
             | [] -> failwith "Typer.Env.generate: missing root Existential scope"
         in generate env.scopes
 
+    let skolemizing ({scopes; current_level} as env) (params, body) f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let skolems = List.map (fun binding -> (binding, level)) params in
+            let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty skolems in
+            f {env with scopes = Universal skolems :: scopes}
+              (substitute substitution body)
+        )
+
     let skolemizing_domain ({scopes; current_level} as env) (existentials, domain) f =
         with_incremented_level env (fun () ->
             let level = !current_level in
@@ -98,38 +109,44 @@ let rec typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
             let env = Env.push_domain env {name; typ = domain} in
             Env.with_existential env (fun env existentials ->
                 let {term = body; typ = codomain; eff} = typeof env body in
-                { term = {expr with v = Fn ( {name; typ = codomain}, body)} (* FIXME: bind existentials *)
-                ; typ = (universals, Arrow (domain, eff, (!existentials, codomain)))
+                { term = {expr with v = Fn (universals, {name; typ = domain}, body)} (* FIXME: bind existentials *)
+                ; typ = Pi (universals, domain, eff, (!existentials, codomain))
                 ; eff = Pure }
             )
         )
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee; typ = callee_typ; eff = callee_eff} = typeof env callee in
-        (match focalize callee.pos env callee_typ (Arrow (([], Int), Impure, ([], ([], Int)))) with
-        | (coerce, Arrow (domain, app_eff, codomain)) ->
+        (match focalize callee.pos env callee_typ (Pi ([], Int, Impure, ([], Int))) with
+        | (coerce, Pi (universals, domain, app_eff, codomain)) ->
+            let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
+            let substitution = List.fold_left2 (fun substitution (name, _) uv ->
+                Name.Map.add name uv substitution
+            ) Name.Map.empty universals uvs in
+            let domain = substitute substitution domain in
+            let codomain = substitute_abs substitution codomain in
             let {term = arg; typ = _; eff = arg_eff} = check env ([], domain) arg in
-            { term = {expr with v = App ({expr with v = App (coerce, callee)}, arg)}
-            ; typ = snd codomain (* FIXME: Translate from existential to F_c *)
+            { term = {expr with v = App ({expr with v = App (coerce, [], callee)}, uvs, arg)}
+            ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
-        {term = {expr with v = Proxy typ}; typ = ([], Type typ); eff = Pure}
+        {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
     | Ast.Use name ->
         let ({typ; _} as def) : lvalue = Env.get env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
-    | Ast.Const c -> {term = {expr with v = Const c}; typ = ([], Int); eff = Pure}
+    | Ast.Const c -> {term = {expr with v = Const c}; typ = Int; eff = Pure}
 
 and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
     let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr Ast.with_pos) =
         let {term; typ = expr_typ; eff} = typeof env expr in
         let coerce = subtype expr.pos true env expr_typ typ in
-        {term = {expr with v = App ({v = coerce; pos = expr.pos}, term)}; typ; eff}
+        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ; eff}
     in
     let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
         match expr.v with
         | Ast.If (cond, conseq, alt) ->
-            let {term = cond; eff = cond_eff} = check env ([], ([], Bool)) cond in
+            let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
             let {term = conseq; eff = conseq_eff} = implement env typ conseq in
             let {term = alt; eff = alt_eff} = implement env typ alt in
             { term = {expr with v = If (cond, conseq, alt)}
@@ -186,18 +203,18 @@ and kindcheck env (typ : Ast.typ Ast.with_pos) =
                     ) in
                     let substitution = List.fold_left2 (fun substitution (name, _) existential ->
                         let path = List.fold_left (fun path arg ->
-                            FcType.App (([], path), ([], Use arg))
+                            FcType.App (path, Use arg)
                         ) (FcType.Use existential) universals in
                         Name.Map.add name path substitution
                     ) Name.Map.empty existentials existentials' in
                     let codomain = (existentials', substitute substitution (snd codomain)) in
                     let codomain = reabstract env codomain in
-                    (universals, Arrow (domain, eff, ([], codomain)))
-                | Impure -> (universals, Arrow (domain, eff, codomain))
+                    Pi (universals, domain, eff, ([], codomain))
+                | Impure -> Pi (universals, domain, eff, codomain)
             )
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
-            | {term = _; typ = ([], Type typ); eff = Pure} -> reabstract env typ
+            | {term = _; typ = Type typ; eff = Pure} -> reabstract env typ
             | _ -> raise TypeError)
         | Ast.Singleton expr ->
             (match typeof env expr with
@@ -205,9 +222,9 @@ and kindcheck env (typ : Ast.typ Ast.with_pos) =
             | _ -> raise TypeError)
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
-            ([], Type ([], ([], Ov ov)))
-        | Ast.Int -> ([], Int)
-        | Ast.Bool -> ([], Bool)
+            Type ([], Ov ov)
+        | Ast.Int -> Int
+        | Ast.Bool -> Bool
     in
     Env.with_existential env (fun env params ->
         let typ = elaborate env typ in
@@ -221,8 +238,8 @@ and articulate uv template = match uv with
     | {contents = Unassigned _} ->
         let typ =
             match template with
-            | Arrow _ -> Arrow (([], Uv (sibling uv)), Impure, ([], ([], Uv (sibling uv))))
-            | Type _ -> Type ([], ([], Uv (sibling uv)))
+            | Pi _ -> Pi ([], Uv (sibling uv), Impure, ([], Uv (sibling uv)))
+            | Type _ -> Type ([], Uv (sibling uv))
             | Int | Bool -> template
         in
         uv := Assigned typ;
@@ -230,26 +247,10 @@ and articulate uv template = match uv with
 
 (* # Focalization *)
 
-and focalize pos env typ template =
-    let focalize_unq typ template = match (typ, template) with
-        | (Arrow _, Arrow _) ->
-            let param = {name = Name.fresh (); typ = ([], typ)} in
-            ({Ast.v = Fn (param, {Ast.v = Use param; pos}); pos}, typ)
-    in
-    match typ with
-    | ([], body) -> focalize_unq body template
-    | (universals, body) ->
-        let uvs = List.map (fun (name, _) -> Env.uv env name) universals in
-        let substitution = List.fold_left2 (fun substitution (name, _) uv ->
-            Name.Map.add name (Uv uv) substitution
-        ) Name.Map.empty universals uvs in
-        let (coerce_instance, typ') = focalize_unq (substitute_unq substitution body) template in
+and focalize pos env typ template = match (typ, template) with
+    | (Pi _, Pi _) ->
         let param = {name = Name.fresh (); typ} in
-        let body =
-            List.fold_left (fun body uv -> {Ast.pos; v = TApp (body, {pos; v = Uv uv})})
-                {pos; v = Use param} uvs in
-        ( {pos; v = Fn (param, {pos; v = App (coerce_instance, body)})}
-        , typ' )
+        ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
 
 (* # Subtyping *)
 
@@ -262,39 +263,36 @@ and sub_eff eff eff' = match (eff, eff') with
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
     | (([], body), ([], body')) -> subtype pos occ env body body'
 
-and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) = match (typ, super) with
-    | (([], body), ([], body')) -> subtype_unq pos occ env body body'
-
-and subtype_unq pos (occ : bool) env (typ : FcType.unq) (super : FcType.unq) =
+and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
     match (typ, super) with
     | (Uv _, Uv _) -> failwith "todo"
     | (Uv uv, super) ->
         (match !uv with
-        | Assigned typ -> subtype_unq pos occ env typ super
-        | Unassigned _ -> subtype_unq pos false env (articulate uv super) super)
+        | Assigned typ -> subtype pos occ env typ super
+        | Unassigned _ -> subtype pos false env (articulate uv super) super)
     | (typ, Uv uv) ->
         (match !uv with
-        | Assigned super -> subtype_unq pos occ env typ super
-        | Unassigned _ -> subtype_unq pos false env typ (articulate uv typ))
-    | (Arrow (domain, eff, codomain), Arrow (domain', eff', codomain')) ->
+        | Assigned super -> subtype pos occ env typ super
+        | Unassigned _ -> subtype pos false env typ (articulate uv typ))
+    | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
         let coerce_domain = subtype pos occ env domain' domain in
         sub_eff eff eff';
         let coerce_codomain = subtype_abs pos occ env codomain codomain' in
-        let param = {name = Name.fresh (); typ = ([], typ)} in
-        Fn (param, {pos; v = App ( {pos; v = coerce_codomain}
-                                 , {pos; v = App ( {pos; v = coerce_domain}
-                                                 , {pos; v = Use param} )} )})
+        let param = {name = Name.fresh (); typ = typ} in
+        Fn ([], param, {pos; v = App ( {pos; v = coerce_codomain}, []
+                                     , {pos; v = App ( {pos; v = coerce_domain}, []
+                                                     , {pos; v = Use param} )} )})
     | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
         let _ = subtype_abs pos occ env carrie carrie' in
         let _ = subtype_abs pos occ env carrie carrie' in
-        let lvalue = {name = Name.fresh (); typ = ([], typ)} in
-        Fn (lvalue, {v = Use lvalue; pos})
+        let lvalue = {name = Name.fresh (); typ = typ} in
+        Fn ([], lvalue, {v = Use lvalue; pos})
     | (Int, Int) | (Bool, Bool) ->
-        let lvalue = {name = Name.fresh (); typ = ([], typ)} in
-        Fn (lvalue, {v = Use lvalue; pos})
+        let lvalue = {name = Name.fresh (); typ = typ} in
+        Fn ([], lvalue, {v = Use lvalue; pos})
     | _ -> failwith (Util.doc_to_string (PPrint.string "todo:"
-                                         ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (unq_to_doc typ)
-                                                               (unq_to_doc super))))
+                                         ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
+                                                               (to_doc super))))
 
 (* # REPL support *)
 
