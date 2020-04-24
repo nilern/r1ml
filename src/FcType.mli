@@ -15,7 +15,7 @@ type binding = Name.t * kind
 type ov = binding * level
 
 type uvv =
-    | Unassigned of binding * level
+    | Unassigned of Name.t * level
     | Assigned of unq
 
 and uv = uvv ref
@@ -46,6 +46,7 @@ val to_doc : t -> PPrint.document
 val unq_to_doc : unq -> PPrint.document
 
 val freshen : binding -> binding
+val sibling : uv -> uv
 
 val substitute_abs : unq Name.Map.t -> abs -> abs
 val substitute : unq Name.Map.t -> t -> t

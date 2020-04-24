@@ -11,7 +11,7 @@ type binding = Name.t * kind
 type ov = binding * level
 
 type uvv =
-    | Unassigned of binding * level
+    | Unassigned of Name.t * level
     | Assigned of unq
 
 and uv = uvv ref
@@ -95,10 +95,15 @@ and binding_to_doc (name, kind) =
 and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_doc bindings
 
 and uv_to_doc uv = match !uv with
-    | Unassigned ((name, _), _) -> PPrint.qmark ^^ Name.to_doc name
+    | Unassigned (name, _) -> PPrint.qmark ^^ Name.to_doc name
     | Assigned t -> unq_to_doc t
 
 let freshen (name, kind) = (Name.freshen name, kind)
+
+let sibling uv = match uv with
+    | {contents = Unassigned (_, level)} ->
+        ref (Unassigned (Name.fresh (), level))
+    | {contents = Assigned _} -> failwith "unreachable"
 
 let rec substitute_abs substitution (params, body) =
     let substitution =

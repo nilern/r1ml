@@ -6,10 +6,10 @@ let prompt = "R1ML> "
 let ep env stmts =
     let step stmt =
         let {term; typ; eff} : FcTerm.stmt Typer.typing = Typer.check_interaction env stmt in
-        PPrint.ToChannel.pretty 1.0 80 stdout (FcTerm.stmt_to_doc term ^^ PPrint.hardline);
+        PPrint.ToChannel.pretty 1.0 80 stdout (PPrint.hardline ^^ PPrint.hardline ^^ FcTerm.stmt_to_doc term);
         let doc = PPrint.group (PPrint.group (PPrint.colon ^/^ FcType.to_doc typ)
             ^/^ PPrint.group (PPrint.bang ^/^ Ast.effect_to_doc eff)) in
-        PPrint.ToChannel.pretty 1.0 80 stdout doc in
+        PPrint.ToChannel.pretty 1.0 80 stdout (PPrint.hardline ^^ doc) in
     List.iter step stmts
 
 let rec repl env =
@@ -21,7 +21,7 @@ let rec repl env =
         (try
             let stmts = SedlexMenhir.sedlex_with_menhir Lexer.token Parser.stmts lexbuf in
             let doc = PPrint.group (PPrint.separate_map (PPrint.semi ^^ PPrint.break 1) Ast.stmt_to_doc stmts) in
-            PPrint.ToChannel.pretty 1.0 80 stdout (doc ^^ PPrint.hardline);
+            PPrint.ToChannel.pretty 1.0 80 stdout doc;
             ep env stmts;
             print_newline ()
         with
