@@ -2,17 +2,24 @@ let (^/^) = PPrint.(^/^)
 
 open FcType
 open FcTerm
+type 'a with_pos = 'a Ast.with_pos
 
 type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
 
 exception TypeError
 
 module Env = struct
+    type val_binder =
+        | White of Ast.lvalue
+        | Grey of Ast.lvalue
+        | Black of lvalue
+
     type scope
-        = Repl of (Name.t, lvalue) Hashtbl.t
+        = Repl of (Name.t, val_binder ref) Hashtbl.t
         | Existential of binding list ref * level
         | Universal of ov list
-        | Fn of lvalue 
+        | Fn of val_binder ref
+        | Sig of val_binder ref Name.Map.t
 
     type t = {scopes : scope list; current_level : level ref}
 
@@ -25,7 +32,7 @@ module Env = struct
     let repl_define env ({name; _} as binding) =
         let rec define scopes =
             match scopes with
-            | Repl kvs :: _ -> Hashtbl.replace kvs name binding
+            | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (Black binding))
             | _ :: scopes' -> define scopes'
             | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
         in define env.scopes
@@ -75,17 +82,30 @@ module Env = struct
     let uv {current_level = {contents = level}; _} binding =
         ref (Unassigned (binding, level))
 
-    let push_domain env binding = {env with scopes = Fn binding :: env.scopes}
+    let push_domain env binding =
+        {env with scopes = Fn (ref (Black binding)) :: env.scopes}
+
+    let push_sig env bindings =
+        let bindings = List.fold_left (fun bindings ({Ast.pat = name; _} as binding) ->
+            Name.Map.add name (ref (White binding)) bindings
+        ) Name.Map.empty bindings in
+        {env with scopes = Sig bindings :: env.scopes}
 
     let get env name =
         let rec get scopes name =
             match scopes with
             | Repl kvs :: scopes' ->
                 (match Hashtbl.find_opt kvs name with
-                | Some def -> def
+                | Some def -> ({env with scopes}, def)
                 | None -> get scopes' name)
-            | Fn ({name = name'; _} as def) :: scopes' ->
-                if name' = name then def else get scopes' name
+            | Fn ({contents = Black {name = name'; _}} as def) :: scopes' ->
+                if name' = name
+                then ({env with scopes}, def)
+                else get scopes' name
+            | Sig kvs :: scopes' ->
+                (match Name.Map.find_opt name kvs with
+                | Some def -> ({env with scopes}, def)
+                | None -> get scopes' name)
             | (Existential _ | Universal _) :: scopes' -> get scopes' name
             | [] -> raise TypeError
         in get env.scopes name
@@ -99,7 +119,7 @@ let join_effs eff eff' = match (eff, eff') with
 
 (* # Expressions *)
 
-let rec typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
+let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.Fn ({pat = name; ann}, body) ->
         let ann = match ann with
             | Some ann -> ann
@@ -133,17 +153,17 @@ let rec typeof env (expr : Ast.expr Ast.with_pos) = match expr.v with
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
     | Ast.Use name ->
-        let ({typ; _} as def) : lvalue = Env.get env name in
+        let {name = _; typ} as def = lookup env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
     | Ast.Const c -> {term = {expr with v = Const c}; typ = Int; eff = Pure}
 
-and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
-    let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr Ast.with_pos) =
+and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr with_pos) =
+    let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr with_pos) =
         let {term; typ = expr_typ; eff} = typeof env expr in
         let coerce = subtype expr.pos true env expr_typ typ in
         {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ; eff}
     in
-    let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr Ast.with_pos) =
+    let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr with_pos) =
         match expr.v with
         | Ast.If (cond, conseq, alt) ->
             let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
@@ -176,15 +196,15 @@ and deftype env : Ast.def -> def typing = function
 
 (* # Type Elaboration *)
 
-and kindcheck env (typ : Ast.typ Ast.with_pos) =
-    let reabstract env (params, body) =
-        let substitution = List.fold_left (fun substitution ((name, _) as param) ->
-            let skolem = Env.generate env (freshen param) in
-            Name.Map.add name (Ov skolem) substitution
-        ) Name.Map.empty params
-        in substitute substitution body
-    in
-    let rec elaborate env (typ : Ast.typ Ast.with_pos) =
+and reabstract env (params, body) =
+    let substitution = List.fold_left (fun substitution ((name, _) as param) ->
+        let skolem = Env.generate env (freshen param) in
+        Name.Map.add name (Ov skolem) substitution
+    ) Name.Map.empty params
+    in substitute substitution body
+
+and kindcheck env (typ : Ast.typ with_pos) =
+    let rec elaborate env (typ : Ast.typ with_pos) =
         match typ.v with
         | Ast.Pi ({name; typ = domain}, eff, codomain) ->
             let (universals, _) as domain = kindcheck env domain in
@@ -212,6 +232,10 @@ and kindcheck env (typ : Ast.typ Ast.with_pos) =
                     Pi (universals, domain, eff, ([], codomain))
                 | Impure -> Pi (universals, domain, eff, codomain)
             )
+        | Ast.Sig decls ->
+            let bindings = (List.map (fun {Ast.name; typ} -> {Ast.pat = name; ann = Some typ}) decls) in
+            let env = Env.push_sig env bindings in
+            Record (List.map (elaborate_decl env) decls)
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = Type typ; eff = Pure} -> reabstract env typ
@@ -225,11 +249,26 @@ and kindcheck env (typ : Ast.typ Ast.with_pos) =
             Type ([], Ov ov)
         | Ast.Int -> Int
         | Ast.Bool -> Bool
+
+    and elaborate_decl env {name; _} =
+        let {name; typ} = lookup env name in
+        {label = Name.to_string name; typ}
     in
     Env.with_existential env (fun env params ->
         let typ = elaborate env typ in
         (!params, typ)
     )
+
+(* # Lookup *)
+
+and lookup env name =
+    match Env.get env name with
+    | (env, ({contents = Env.White ({pat = name; ann = Some typ} as lvalue)} as binding)) ->
+        binding := Env.Grey lvalue;
+        let def = {name; typ = reabstract env (kindcheck env typ)} in
+        binding := Env.Black def;
+        def
+    | (_, {contents = Env.Black def}) -> def
 
 (* # Articulation *)
 

@@ -22,10 +22,12 @@ let of_string str = String str
 
 let compare = compare
 
-let to_doc = function
-    | String s -> PPrint.string s
-    | Fresh n -> PPrint.string ("__" ^ Int.to_string n)
-    | Fring (s, n) -> PPrint.string (s ^ "__" ^ Int.to_string n)
+let to_string = function
+    | String s -> s
+    | Fresh n ->"__" ^ Int.to_string n
+    | Fring (s, n) -> s ^ "__" ^ Int.to_string n
+
+let to_doc name = PPrint.string (to_string name)
 
 type name = t
 
