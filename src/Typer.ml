@@ -10,9 +10,13 @@ exception TypeError
 
 module Env = struct
     type val_binder =
-        | White of Ast.lvalue
-        | Grey of Ast.lvalue
-        | Black of lvalue
+        | WhiteDecl of Ast.decl
+        | GreyDecl of Ast.decl
+        | BlackDecl of lvalue
+        | WhiteDef of Ast.lvalue * Ast.expr with_pos
+        | GreyDef of Ast.lvalue * Ast.expr with_pos
+        | BlackAnn of lvalue * Ast.expr with_pos * binding list
+        | BlackUnn of lvalue * expr with_pos * effect
 
     type scope
         = Repl of (Name.t, val_binder ref) Hashtbl.t
@@ -20,6 +24,7 @@ module Env = struct
         | Universal of ov list
         | Fn of val_binder ref
         | Sig of val_binder ref Name.Map.t
+        | Struct of val_binder ref Name.Map.t
 
     type t = {scopes : scope list; current_level : level ref}
 
@@ -32,7 +37,7 @@ module Env = struct
     let repl_define env ({name; _} as binding) =
         let rec define scopes =
             match scopes with
-            | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (Black binding))
+            | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (BlackDecl binding))
             | _ :: scopes' -> define scopes'
             | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
         in define env.scopes
@@ -83,13 +88,19 @@ module Env = struct
         ref (Unassigned (binding, level))
 
     let push_domain env binding =
-        {env with scopes = Fn (ref (Black binding)) :: env.scopes}
+        {env with scopes = Fn (ref (BlackDecl binding)) :: env.scopes}
 
     let push_sig env bindings =
-        let bindings = List.fold_left (fun bindings ({Ast.pat = name; _} as binding) ->
-            Name.Map.add name (ref (White binding)) bindings
+        let bindings = List.fold_left (fun bindings ({Ast.name; _} as binding) ->
+            Name.Map.add name (ref (WhiteDecl binding)) bindings
         ) Name.Map.empty bindings in
         {env with scopes = Sig bindings :: env.scopes}
+
+    let push_struct env bindings =
+        let bindings = List.fold_left (fun bindings ({Ast.pat = name; _} as binding, expr) ->
+            Name.Map.add name (ref (WhiteDef (binding, expr))) bindings
+        ) Name.Map.empty bindings in
+        {env with scopes = Struct bindings :: env.scopes}
 
     let get env name =
         let rec get scopes name =
@@ -98,11 +109,11 @@ module Env = struct
                 (match Hashtbl.find_opt kvs name with
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes' name)
-            | Fn ({contents = Black {name = name'; _}} as def) :: scopes' ->
+            | Fn ({contents = BlackDecl {name = name'; _}} as def) :: scopes' ->
                 if name' = name
                 then ({env with scopes}, def)
                 else get scopes' name
-            | Sig kvs :: scopes' ->
+            | (Sig kvs | Struct kvs) :: scopes' ->
                 (match Name.Map.find_opt name kvs with
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes' name)
@@ -149,6 +160,13 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
+    | Ast.Struct defs ->
+        let bindings = List.map (fun (_, lvalue, expr) -> (lvalue, expr)) defs in
+        let env = Env.push_struct env bindings in
+        let (defs, fields, field_typs, eff) = field_types env defs in
+        { term = {expr with v = letrec defs {expr with v = Record fields}}
+        ; typ = FcType.Record field_typs
+        ; eff }
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
@@ -157,51 +175,62 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         {term = {expr with v = Use def}; typ; eff = Pure}
     | Ast.Const c -> {term = {expr with v = Const c}; typ = Int; eff = Pure}
 
+and field_types env fields =
+    let (defs, fields, typs, eff) = List.fold_left (fun (defs, fields, typs, eff) field ->
+        let {term = (pos, ({name; _} as lvalue), _) as def; typ; eff = field_eff} = deftype env field in
+        let label = Name.to_string name in
+        ( def :: defs
+        , {label; expr = {pos; v = Use lvalue}} :: fields
+        , {label; typ} :: typs
+        , join_effs eff field_eff )
+    ) ([], [], [], Pure) fields in
+    (List.rev defs, List.rev fields, List.rev typs, eff)
+
 and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr with_pos) =
-    let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr with_pos) =
-        let {term; typ = expr_typ; eff} = typeof env expr in
-        let coerce = subtype expr.pos true env expr_typ typ in
-        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ; eff}
-    in
-    let rec implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr with_pos) =
-        match expr.v with
-        | Ast.If (cond, conseq, alt) ->
-            let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
-            let {term = conseq; eff = conseq_eff} = implement env typ conseq in
-            let {term = alt; eff = alt_eff} = implement env typ alt in
-            { term = {expr with v = If (cond, conseq, alt)}
-            ; typ = body
-            ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
-        | _ ->
-            (match params with
-            | _ :: _ -> failwith "todo: create axioms"
-            | [] -> ());
-            check_concrete_unconditional env body expr
-    in
     (match params with
     | _ :: _ -> failwith "todo: hoist abstract types"
     | [] -> ());
     implement env typ expr
 
+and implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr with_pos) =
+    let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr with_pos) =
+        let {term; typ = expr_typ; eff} = typeof env expr in
+        let coerce = subtype expr.pos true env expr_typ typ in
+        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ; eff}
+    in
+    match expr.v with
+    | Ast.If (cond, conseq, alt) ->
+        let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
+        let {term = conseq; eff = conseq_eff} = implement env typ conseq in
+        let {term = alt; eff = alt_eff} = implement env typ alt in
+        { term = {expr with v = If (cond, conseq, alt)}
+        ; typ = body
+        ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
+    | _ ->
+        (match params with
+        | _ :: _ -> failwith "todo: create axioms"
+        | [] -> ());
+        check_concrete_unconditional env body expr
+
 (* # Definitions and Statements *)
 
-and deftype env : Ast.def -> def typing = function
-    | (pos, {Ast.pat = name; ann = Some ann}, expr) ->
-        let abs_typ = kindcheck env ann in
-        let {term = expr; typ; eff} = check env abs_typ expr in
-        {term = (pos, {name; typ}, expr); typ; eff}
-    | (pos, {Ast.pat = name; ann = None}, expr) ->
-        let {term = expr; typ; eff} = typeof env expr in
-        {term = (pos, {name; typ}, expr); typ; eff}
+and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
+    let _ = lookup env name in
+    match Env.get env name with
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, universals)}) ->
+        let {term = expr; typ; eff} = implement env (universals, typ) expr in
+        {term = (pos, lvalue, expr); typ; eff}
+    | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
+        {term = (pos, lvalue, expr); typ; eff}
 
 (* # Type Elaboration *)
 
 and reabstract env (params, body) =
-    let substitution = List.fold_left (fun substitution ((name, _) as param) ->
-        let skolem = Env.generate env (freshen param) in
-        Name.Map.add name (Ov skolem) substitution
-    ) Name.Map.empty params
-    in substitute substitution body
+    let params' = List.map freshen params in
+    let substitution = List.fold_left2 (fun substitution (name, _) param' ->
+        Name.Map.add name (Ov (Env.generate env param')) substitution
+    ) Name.Map.empty params params' in
+    (params', substitute substitution body)
 
 and kindcheck env (typ : Ast.typ with_pos) =
     let rec elaborate env (typ : Ast.typ with_pos) =
@@ -228,17 +257,16 @@ and kindcheck env (typ : Ast.typ with_pos) =
                         Name.Map.add name path substitution
                     ) Name.Map.empty existentials existentials' in
                     let codomain = (existentials', substitute substitution (snd codomain)) in
-                    let codomain = reabstract env codomain in
+                    let (_, codomain) = reabstract env codomain in
                     Pi (universals, domain, eff, ([], codomain))
                 | Impure -> Pi (universals, domain, eff, codomain)
             )
         | Ast.Sig decls ->
-            let bindings = (List.map (fun {Ast.name; typ} -> {Ast.pat = name; ann = Some typ}) decls) in
-            let env = Env.push_sig env bindings in
+            let env = Env.push_sig env decls in
             Record (List.map (elaborate_decl env) decls)
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
-            | {term = _; typ = Type typ; eff = Pure} -> reabstract env typ
+            | {term = _; typ = Type typ; eff = Pure} -> snd (reabstract env typ)
             | _ -> raise TypeError)
         | Ast.Singleton expr ->
             (match typeof env expr with
@@ -263,12 +291,31 @@ and kindcheck env (typ : Ast.typ with_pos) =
 
 and lookup env name =
     match Env.get env name with
-    | (env, ({contents = Env.White ({pat = name; ann = Some typ} as lvalue)} as binding)) ->
-        binding := Env.Grey lvalue;
-        let def = {name; typ = reabstract env (kindcheck env typ)} in
-        binding := Env.Black def;
-        def
-    | (_, {contents = Env.Black def}) -> def
+    | (env, ({contents = Env.WhiteDecl ({name; typ} as decl)} as binding)) ->
+        binding := Env.GreyDecl decl;
+        let lvalue = {name; typ = snd (reabstract env (kindcheck env typ))} in
+        binding := Env.BlackDecl lvalue;
+        lvalue
+    | (env, {contents = Env.GreyDecl _}) -> raise TypeError
+    | (_, {contents = Env.BlackDecl def}) -> def
+
+    | (env, ({contents = Env.WhiteDef ({pat = name; ann = Some typ} as lvalue, expr)} as binding)) ->
+        binding := Env.GreyDef (lvalue, expr);
+        let (existentials, typ) = reabstract env (kindcheck env typ) in
+        let lvalue = {name; typ} in
+        binding := Env.BlackAnn (lvalue, expr, existentials);
+        lvalue
+    | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
+        binding := Env.GreyDef (lvalue, expr);
+        let {term = expr; typ; eff} = typeof env expr in
+        let lvalue = {name; typ} in
+        binding := Env.BlackUnn (lvalue, expr, eff);
+        lvalue
+    | (env, ({contents = Env.GreyDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
+        let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
+        binding := Env.BlackAnn (lvalue, expr, []);
+        lvalue
+    | (_, {contents = Env.BlackAnn (lvalue, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
 
 (* # Articulation *)
 
@@ -290,6 +337,9 @@ and focalize pos env typ template = match (typ, template) with
     | (Pi _, Pi _) ->
         let param = {name = Name.fresh (); typ} in
         ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
+    | (Uv uv, _) ->
+        let param = {name = Name.fresh (); typ} in
+        ({pos; v = Fn ([], param, {pos; v = Use param})}, articulate uv template)
 
 (* # Subtyping *)
 
@@ -336,7 +386,8 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
 (* # REPL support *)
 
 let check_interaction env : Ast.stmt -> stmt typing = function
-    | Ast.Def ((_, {pat = name; _}, _) as def) ->
+    | Ast.Def ((_, ({pat = name; _} as lvalue), expr) as def) ->
+        let env = Env.push_struct env [(lvalue, expr)] in
         let {term; typ; eff} = deftype env def in
         Env.repl_define env {name; typ};
         {term = Def term; typ; eff}

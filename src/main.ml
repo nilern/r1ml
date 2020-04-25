@@ -3,6 +3,7 @@ let (^/^) = PPrint.(^/^)
 
 let prompt = "R1ML> "
 
+(* TODO: Allow mutual recursion? *)
 let ep env stmts =
     let step stmt =
         let {term; typ; eff} : FcTerm.stmt Typer.typing = Typer.check_interaction env stmt in

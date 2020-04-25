@@ -60,7 +60,7 @@ and to_doc = function
              ^^ PPrint.prefix 4 1 (domain_to_doc domain) 
                     (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
     | Record fields ->
-        PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
+        PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc fields
     | App (callee, arg) -> PPrint.group (callee_to_doc callee ^/^ arg_to_doc arg)
