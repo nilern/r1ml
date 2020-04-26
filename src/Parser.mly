@@ -2,7 +2,7 @@
 
 %token
     IF "if" THEN "then" ELSE "else" FUN "fun" TYPE "type"
-    ARROW "->" DARROW "=>" DOT "." COLON ":" EQ "=" SEMI ";"
+    ARROW "->" DARROW "=>" DOT "." COLON ":" SEAL ":>" EQ "=" SEMI ";"
     LPAREN "(" RPAREN ")"
     LBRACKET "[" RBRACKET "]"
     LBRACE "{" RBRACE "}"
@@ -20,7 +20,6 @@ exprf(nestable)
     : "if" exprf(nestable) "then" exprf(nestable) "else" exprf(nestable) {
         {v = If ($2, $4, $6); pos = $sloc}
     }
-    | "fun" param=param "=>" body=exprf(nestable) { {v = Fn (param, body); pos = $sloc} }
     | appf(nestable) { $1 }
 
 appf(nestable)
@@ -31,7 +30,15 @@ selectf(nestable)
     : record=selectf(nestable) "." label=ID { {v = Select (record, Name.of_string label); pos = $sloc} }
     | nestable { $1 }
 
-expr : exprf(expr_nestable) { $1 }
+expr
+    : "fun" param=param "=>" body=expr { {v = Fn (param, body); pos = $sloc} }
+    | seal_expr { $1 }
+
+seal_expr
+    : expr=seal_expr ":>" ann=typ { {v = Seal (expr, ann); pos = $sloc} }
+    | simple_expr { $1 }
+
+simple_expr : exprf(expr_nestable) { $1 }
 
 expr_nestable : expr_nestable_impl { {v = $1; pos = $sloc} }
 

@@ -23,6 +23,7 @@ and expr
     = Fn of lvalue * expr with_pos
     | If of expr with_pos * expr with_pos * expr with_pos
     | App of expr with_pos * expr with_pos
+    | Seal of expr with_pos * typ with_pos
     | Struct of def list
     | Select of expr with_pos * Name.t
     | Proxy of typ with_pos
