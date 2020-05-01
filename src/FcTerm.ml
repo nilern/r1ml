@@ -2,6 +2,7 @@ type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
 type abs = FcType.abs
 type typ = FcType.t
+type ov = FcType.ov
 
 type lvalue = {name : Name.t; typ : typ}
 
@@ -9,6 +10,7 @@ type expr
     = Fn of FcType.binding list * lvalue * expr with_pos
     | App of expr with_pos * typ list * expr with_pos
     | Letrec of def list * expr with_pos
+    | Axiom of (Name.t * ov * typ) list * expr with_pos
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
     | Proxy of abs 

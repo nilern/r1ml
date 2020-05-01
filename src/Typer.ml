@@ -15,13 +15,14 @@ module Env = struct
         | BlackDecl of lvalue
         | WhiteDef of Ast.lvalue * Ast.expr with_pos
         | GreyDef of Ast.lvalue * Ast.expr with_pos
-        | BlackAnn of lvalue * Ast.expr with_pos * binding list
+        | BlackAnn of lvalue * Ast.expr with_pos * ov list
         | BlackUnn of lvalue * expr with_pos * effect
 
     type scope
         = Repl of (Name.t, val_binder ref) Hashtbl.t
         | Existential of binding list ref * level
         | Universal of ov list
+        | Axiom of (ov * FcType.t) Name.Map.t
         | Fn of val_binder ref
         | Sig of val_binder ref Name.Map.t
         | Struct of val_binder ref Name.Map.t
@@ -102,6 +103,11 @@ module Env = struct
         ) Name.Map.empty bindings in
         {env with scopes = Struct bindings :: env.scopes}
 
+    let push_axioms env axioms =
+        let bindings = List.fold_left (fun bindings (name, t, t') -> Name.Map.add name (t, t') bindings)
+            Name.Map.empty axioms in
+        {env with scopes = Axiom bindings :: env.scopes}
+
     let get env name =
         let rec get scopes name =
             match scopes with
@@ -160,6 +166,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
+    | Ast.Seal (expr, typ) -> check env (kindcheck env typ) expr
     | Ast.Struct defs ->
         let bindings = List.map (fun (_, lvalue, expr) -> (lvalue, expr)) defs in
         let env = Env.push_struct env bindings in
@@ -186,18 +193,10 @@ and field_types env fields =
     ) ([], [], [], Pure) fields in
     (List.rev defs, List.rev fields, List.rev typs, eff)
 
-and check env ((params, _) as typ : FcType.abs) (expr : Ast.expr with_pos) =
-    (match params with
-    | _ :: _ -> failwith "todo: hoist abstract types"
-    | [] -> ());
-    implement env typ expr
+and check env (typ : FcType.abs) (expr : Ast.expr with_pos) =
+    implement env (reabstract env typ) expr
 
-and implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr with_pos) =
-    let check_concrete_unconditional env (typ : FcType.t) (expr : Ast.expr with_pos) =
-        let {term; typ = expr_typ; eff} = typeof env expr in
-        let coerce = subtype expr.pos true env expr_typ typ in
-        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ; eff}
-    in
+and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr with_pos) =
     match expr.v with
     | Ast.If (cond, conseq, alt) ->
         let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
@@ -207,18 +206,17 @@ and implement env ((params, body) as typ : FcType.abs) (expr : Ast.expr with_pos
         ; typ = body
         ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
     | _ ->
-        (match params with
-        | _ :: _ -> failwith "todo: create axioms"
-        | [] -> ());
-        check_concrete_unconditional env body expr
+        let {term; typ = expr_typ; eff} = typeof env expr in
+        let coerce = coercion expr.pos true env expr_typ typ in
+        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ = body; eff}
 
 (* # Definitions and Statements *)
 
 and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup env name in
     match Env.get env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, universals)}) ->
-        let {term = expr; typ; eff} = implement env (universals, typ) expr in
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials)}) ->
+        let {term = expr; typ; eff} = implement env (existentials, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
@@ -226,9 +224,9 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
 (* # Type Elaboration *)
 
 and reabstract env (params, body) =
-    let params' = List.map freshen params in
+    let params' = List.map (fun param -> Env.generate env (freshen param)) params in
     let substitution = List.fold_left2 (fun substitution (name, _) param' ->
-        Name.Map.add name (Ov (Env.generate env param')) substitution
+        Name.Map.add name (Ov param') substitution
     ) Name.Map.empty params params' in
     (params', substitute substitution body)
 
@@ -348,6 +346,16 @@ and sub_eff eff eff' = match (eff, eff') with
     | (Ast.Pure, Ast.Impure) -> ()
     | (Ast.Impure, Ast.Pure) -> raise TypeError
     | (Ast.Impure, Ast.Impure) -> ()
+
+and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov list * FcType.t) =
+    let axioms = List.map (fun (((name, _), _) as param) ->
+        (Name.fresh (), param, Uv (Env.uv env name))
+    ) existentials in
+    let env = Env.push_axioms env axioms in
+    let coerce = subtype pos occ env typ super in
+    let param = {name = Name.fresh (); typ = typ} in
+    Fn ([], param, {pos; v = Axiom (axioms, {pos; v = App ( {pos; v = coerce}, []
+                                                          , {pos; v = Use param} )})})
 
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
     | (([], body), ([], body')) -> subtype pos occ env body body'

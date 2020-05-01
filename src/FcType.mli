@@ -36,6 +36,9 @@ and t =
 
 and field = {label : string; typ : t}
 
+and axiom =
+    | Refl of t
+
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document

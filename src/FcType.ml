@@ -31,6 +31,9 @@ and t =
 
 and field = {label : string; typ : t}
 
+and axiom =
+    | Refl of t
+
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
 

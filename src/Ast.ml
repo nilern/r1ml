@@ -81,6 +81,8 @@ and expr_to_doc = function
             ^/^ PPrint.string "then" ^/^ expr_to_doc conseq.v
             ^/^ PPrint.string "else" ^/^ expr_to_doc alt.v
     | App ({v = callee; _}, {v = arg; _}) -> callee_to_doc callee ^/^ arg_to_doc arg
+    | Seal (expr, typ) ->
+        PPrint.infix 4 1 (PPrint.string ":>") (sealee_to_doc expr.v) (typ_to_doc typ.v)
     | Struct defs ->
         PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.semi ^^ PPrint.break 1) PPrint.rbrace
@@ -98,6 +100,10 @@ and callee_to_doc = function
 and arg_to_doc = function
     | (Fn _ | If _ | App _) as callee -> PPrint.parens (expr_to_doc callee)
     | callee -> expr_to_doc callee
+
+and sealee_to_doc = function
+    | Fn _ as sealee -> PPrint.parens (expr_to_doc sealee)
+    | sealee -> expr_to_doc sealee
 
 and selectee_to_doc = function
     | (Fn _ | If _ | App _) as callee -> PPrint.parens (expr_to_doc callee)

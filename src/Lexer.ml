@@ -19,7 +19,7 @@ let rec token ({stream; _} as lexbuf) =
     | "->" -> update lexbuf; ARROW
     | "=>" -> update lexbuf; DARROW
     | '.'  -> update lexbuf; DOT
-    | ":>" -> update lexbuf; COLON
+    | ":>" -> update lexbuf; SEAL
     | ':'  -> update lexbuf; COLON
     | '='  -> update lexbuf; EQ
     | ';'  -> update lexbuf; SEMI
