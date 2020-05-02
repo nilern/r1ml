@@ -176,7 +176,13 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
-    | Ast.Seal (expr, typ) -> check env (kindcheck env typ) expr
+    | Ast.Seal (expr, typ) ->
+        let (existentials, _) as typ = kindcheck env typ in
+        let res = check env typ expr in
+        let gen_eff = match existentials with
+            | _ :: _ -> Ast.Impure
+            | [] -> Ast.Pure in
+        {res with eff = join_effs res.eff gen_eff}
     | Ast.Struct defs ->
         let bindings = List.map (fun (_, lvalue, expr) -> (lvalue, expr)) defs in
         let env = Env.push_struct env bindings in
