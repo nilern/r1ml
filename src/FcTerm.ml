@@ -3,6 +3,7 @@ type 'a with_pos = 'a Ast.with_pos
 type abs = FcType.abs
 type typ = FcType.t
 type ov = FcType.ov
+type coercion = FcType.coercion
 
 type lvalue = {name : Name.t; typ : typ}
 
@@ -11,6 +12,7 @@ type expr
     | App of expr with_pos * typ list * expr with_pos
     | Letrec of def list * expr with_pos
     | Axiom of (Name.t * ov * typ) list * expr with_pos
+    | Cast of expr with_pos * coercion
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
     | Proxy of abs 
@@ -29,6 +31,7 @@ let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
 
 module Type = FcType
+let coercion_to_doc = Type.coercion_to_doc
 
 let letrec defs (body : expr with_pos) = match defs with
     | [] -> body.v
@@ -63,6 +66,14 @@ let rec expr_to_doc = function
                             (PPrint.break 1 ^^ PPrint.langle) (PPrint.comma ^^ PPrint.break 1) PPrint.rangle
                             FcType.to_doc targs
                       ^/^ arg_to_doc arg.v)
+    | Axiom (axioms, body) ->
+        PPrint.group(
+            PPrint.surround 4 1 (PPrint.string "axiom")
+                (PPrint.align (PPrint.separate_map (PPrint.semi ^^ PPrint.break 1) axiom_to_doc axioms))
+                (PPrint.string "in")
+            ^/^ expr_to_doc body.v)
+    | Cast ({v = expr; _}, coercion) ->
+        PPrint.infix 4 1 (PPrint.string "|>") (castee_to_doc expr) (coercion_to_doc coercion)
     | Record defs ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
@@ -72,12 +83,20 @@ let rec expr_to_doc = function
     | Const v -> PPrint.string (Int.to_string v)
 
 and callee_to_doc = function
-    | (Fn _ | Letrec _) as callee -> PPrint.parens (expr_to_doc callee)
+    | (Fn _ | Cast _ | Letrec _ | Axiom _) as callee -> PPrint.parens (expr_to_doc callee)
     | callee -> expr_to_doc callee
 
 and arg_to_doc = function
-    | (Fn _ | Letrec _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
+    | (Fn _ | Cast _ | Letrec _ | Axiom _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
     | arg -> expr_to_doc arg
+
+and axiom_to_doc (name, ((ov_name, _), _), typ) =
+    PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
+        (PPrint.infix 4 1 PPrint.tilde (Name.to_doc ov_name) (Type.to_doc typ))
+
+and castee_to_doc = function
+    | Fn _ as callee -> PPrint.parens (expr_to_doc callee)
+    | callee -> expr_to_doc callee
 
 and def_to_doc ((_, lvalue, {v = expr; _}) : def) =
     PPrint.infix 4 1 PPrint.equals (lvalue_to_doc lvalue) (expr_to_doc expr)

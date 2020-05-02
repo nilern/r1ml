@@ -36,13 +36,16 @@ and t =
 
 and field = {label : string; typ : t}
 
-and axiom =
+and coercion =
     | Refl of t
+    | Symm of coercion
+    | AUse of Name.t
 
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
 val to_doc : t -> PPrint.document
+val coercion_to_doc : coercion -> PPrint.document
 
 val freshen : binding -> binding
 val sibling : uv -> uv

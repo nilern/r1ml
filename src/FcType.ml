@@ -31,8 +31,10 @@ and t =
 
 and field = {label : string; typ : t}
 
-and axiom =
+and coercion =
     | Refl of t
+    | Symm of coercion
+    | AUse of Name.t
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
@@ -97,6 +99,15 @@ and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_d
 and uv_to_doc uv = match !uv with
     | Unassigned (name, _) -> PPrint.qmark ^^ Name.to_doc name
     | Assigned t -> to_doc t
+
+let rec coercion_to_doc = function
+    | Refl typ -> to_doc typ
+    | Symm co -> PPrint.string "symm" ^/^ reversee_to_doc co
+    | AUse name -> Name.to_doc name
+
+and reversee_to_doc = function
+    | Symm _ as reversee -> PPrint.parens (coercion_to_doc reversee)
+    | reversee -> coercion_to_doc reversee
 
 let freshen (name, kind) = (Name.freshen name, kind)
 

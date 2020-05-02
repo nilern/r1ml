@@ -22,7 +22,7 @@ module Env = struct
         = Repl of (Name.t, val_binder ref) Hashtbl.t
         | Existential of binding list ref * level
         | Universal of ov list
-        | Axiom of (ov * FcType.t) Name.Map.t
+        | Axiom of (Name.t * ov * FcType.t) Name.Map.t
         | Fn of val_binder ref
         | Sig of val_binder ref Name.Map.t
         | Struct of val_binder ref Name.Map.t
@@ -104,28 +104,38 @@ module Env = struct
         {env with scopes = Struct bindings :: env.scopes}
 
     let push_axioms env axioms =
-        let bindings = List.fold_left (fun bindings (name, t, t') -> Name.Map.add name (t, t') bindings)
-            Name.Map.empty axioms in
+        let bindings = List.fold_left (fun bindings ((_, ((k, _), _), _) as v) ->
+            Name.Map.add k v bindings
+        ) Name.Map.empty axioms in
         {env with scopes = Axiom bindings :: env.scopes}
 
     let get env name =
-        let rec get scopes name =
-            match scopes with
+        let rec get scopes = match scopes with
             | Repl kvs :: scopes' ->
                 (match Hashtbl.find_opt kvs name with
                 | Some def -> ({env with scopes}, def)
-                | None -> get scopes' name)
+                | None -> get scopes')
             | Fn ({contents = BlackDecl {name = name'; _}} as def) :: scopes' ->
                 if name' = name
                 then ({env with scopes}, def)
-                else get scopes' name
+                else get scopes'
             | (Sig kvs | Struct kvs) :: scopes' ->
                 (match Name.Map.find_opt name kvs with
                 | Some def -> ({env with scopes}, def)
-                | None -> get scopes' name)
-            | (Existential _ | Universal _) :: scopes' -> get scopes' name
+                | None -> get scopes')
+            | (Existential _ | Universal _) :: scopes' -> get scopes'
             | [] -> raise TypeError
-        in get env.scopes name
+        in get env.scopes
+
+    let get_implementation env ((name, _), _) =
+        let rec get = function
+            | Axiom kvs :: scopes ->
+                (match Name.Map.find_opt name kvs with
+                | Some axiom -> Some axiom
+                | None -> get scopes)
+            | _ :: scopes -> get scopes
+            | [] -> None
+        in get env.scopes
 end
 
 (* # Effects *)
@@ -371,6 +381,14 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
         (match !uv with
         | Assigned super -> subtype pos occ env typ super
         | Unassigned _ -> subtype pos false env typ (articulate uv typ))
+    | (typ, Ov ov) ->
+        (match Env.get_implementation env ov with
+        | Some (axname, _, super) ->
+            let coerce = subtype pos occ env typ super in
+            let param = {name = Name.fresh (); typ = typ} in
+            Fn ([], param, {pos; v = Cast ( {pos; v = App ({pos; v = coerce}, [], {pos; v = Use param})}
+                                          , Symm (AUse axname) )})
+        | None -> failwith "todo")
     | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
         let coerce_domain = subtype pos occ env domain' domain in
         sub_eff eff eff';
@@ -383,7 +401,7 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
         let _ = subtype_abs pos occ env carrie carrie' in
         let _ = subtype_abs pos occ env carrie carrie' in
         let lvalue = {name = Name.fresh (); typ = typ} in
-        Fn ([], lvalue, {v = Use lvalue; pos})
+        Fn ([], lvalue, {v = Proxy carrie'; pos})
     | (Int, Int) | (Bool, Bool) ->
         let lvalue = {name = Name.fresh (); typ = typ} in
         Fn ([], lvalue, {v = Use lvalue; pos})
