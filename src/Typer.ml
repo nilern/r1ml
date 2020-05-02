@@ -163,8 +163,9 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             )
         )
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
-        let {term = callee; typ = callee_typ; eff = callee_eff} = typeof env callee in
-        (match focalize callee.pos env callee_typ (Pi ([], Int, Impure, ([], Int))) with
+        let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
+        let callee = {name = Name.fresh (); typ = callee_typ} in
+        (match focalize callee_expr.pos env callee_typ (Pi ([], Int, Impure, ([], Int))) with
         | (coerce, Pi (universals, domain, app_eff, codomain)) ->
             let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
             let substitution = List.fold_left2 (fun substitution (name, _) uv ->
@@ -173,7 +174,9 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             let domain = substitute substitution domain in
             let codomain = substitute_abs substitution codomain in
             let {term = arg; typ = _; eff = arg_eff} = check env ([], domain) arg in
-            { term = {expr with v = App ({expr with v = App (coerce, [], callee)}, uvs, arg)}
+            { term = { pos = callee_expr.pos
+                     ; v = Letrec ( [(callee_expr.pos, callee, callee_expr)]
+                                  , {expr with v = App (coerce {expr with v = Use callee}, uvs, arg)} ) }
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
@@ -199,7 +202,9 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let shape = FcType.Record [{label; typ = Int}] in
         (match focalize record.pos env record_typ shape with
         | (coerce, Record [{label = _; typ}]) ->
-            { term = {expr with v = Select ({expr with v = App (coerce, [], record)}, label)}
+            let selectee = {name = Name.fresh (); typ = record_typ} in
+            { term = {expr with v = Letrec ( [(record.pos, selectee, record)]
+                                           , {expr with v = Select (coerce {expr with v = Use selectee}, label)} )}
             ; typ; eff}
         | _ -> failwith "unreachable")
     | Ast.Proxy typ ->
@@ -239,8 +244,10 @@ and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr 
         ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
     | _ ->
         let {term; typ = expr_typ; eff} = typeof env expr in
+        let lvalue = {name = Name.fresh (); typ = expr_typ} in
         let coerce = coercion expr.pos true env expr_typ typ in
-        {term = {expr with v = App ({v = coerce; pos = expr.pos}, [], term)}; typ = body; eff}
+        { term = {expr with v = Letrec ([(expr.pos, lvalue, term)], coerce {expr with v = Use lvalue})}
+        ; typ = body; eff}
 
 (* # Definitions and Statements *)
 
@@ -341,7 +348,7 @@ and lookup env name =
         let lvalue = {name; typ} in
         binding := Env.BlackUnn (lvalue, expr, eff);
         lvalue
-    | (env, ({contents = Env.GreyDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
+    | (env, ({contents = Env.GreyDef ({pat = name; ann = None}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackAnn (lvalue, expr, []);
         lvalue
@@ -363,18 +370,12 @@ and articulate uv template = match uv with
 
 (* # Focalization *)
 
-and focalize pos env typ template = match (typ, template) with
-    | (Uv uv, _) ->
-        let param = {name = Name.fresh (); typ} in
-        ({pos; v = Fn ([], param, {pos; v = Use param})}, articulate uv template)
-    | (Pi _, Pi _) ->
-        let param = {name = Name.fresh (); typ} in
-        ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
+and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = match (typ, template) with
+    | (Uv uv, _) -> ((fun v -> v), articulate uv template)
+    | (Pi _, Pi _) -> ((fun v -> v), typ)
     | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
-        | Some {label = _; typ = field_typ} ->
-            let param = {name = Name.fresh (); typ = field_typ} in
-            ({pos; v = Fn ([], param, {pos; v = Use param})}, Record [{label; typ}])
+        | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ}])
         | None -> raise TypeError)
 
 (* # Subtyping *)
@@ -391,11 +392,9 @@ and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov l
     ) existentials in
     let env = Env.push_axioms env axioms in
     let coerce = subtype pos occ env typ super in
-    let param = {name = Name.fresh (); typ = typ} in
-    let body = {Ast.pos; v = App ({pos; v = coerce}, [], {pos; v = Use param})} in
-    Fn ([], param, match axioms with
-        | _ :: _ -> {pos; v = Axiom (axioms, body)}
-        | [] -> body)
+    match axioms with
+    | _ :: _ -> fun v -> {pos; v = Axiom (axioms, coerce v)}
+    | [] -> coerce
 
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
     | (([], body), ([], body')) -> subtype pos occ env body body'
@@ -415,37 +414,32 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
         (match Env.get_implementation env ov with
         | Some (axname, _, super) ->
             let coerce = subtype pos occ env typ super in
-            let param = {name = Name.fresh (); typ = typ} in
-            Fn ([], param, {pos; v = Cast ( {pos; v = App ({pos; v = coerce}, [], {pos; v = Use param})}
-                                          , Symm (AUse axname) )})
+            fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))}
         | None -> failwith "todo")
     | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
         let coerce_domain = subtype pos occ env domain' domain in
         sub_eff eff eff';
         let coerce_codomain = subtype_abs pos occ env codomain codomain' in
-        let param = {name = Name.fresh (); typ = typ} in
-        Fn ([], param, {pos; v = App ( {pos; v = coerce_codomain}, []
-                                     , {pos; v = App ( {pos; v = coerce_domain}, []
-                                                     , {pos; v = Use param} )} )})
+        let param = {name = Name.fresh (); typ = domain} in
+        fun v ->
+            {pos; v = Fn ( [], param
+                         , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})}
     | (FcType.Record fields, FcType.Record super_fields) ->
-        let param = {name = Name.fresh (); typ = typ} in
+        let selectee = {name = Name.fresh (); typ = typ} in
         let fields = List.map (fun {label; typ = super} ->
             match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
             | Some {label = _; typ} ->
                 let coerce = subtype pos occ env typ super in
-                {label; expr = {pos; v = App ( {pos; v = coerce}, []
-                                             , {pos; v = Select ({pos; v = Use param}, label)} )}}
+                {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
             | None -> raise TypeError
         ) super_fields in
-        Fn ([], param, {pos; v = Record fields})
+        fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})}
     | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
         let _ = subtype_abs pos occ env carrie carrie' in
         let _ = subtype_abs pos occ env carrie carrie' in
-        let lvalue = {name = Name.fresh (); typ = typ} in
-        Fn ([], lvalue, {v = Proxy carrie'; pos})
+        fun _ -> {v = Proxy carrie'; pos}
     | (Int, Int) | (Bool, Bool) ->
-        let lvalue = {name = Name.fresh (); typ = typ} in
-        Fn ([], lvalue, {v = Use lvalue; pos})
+        fun v -> v
     | _ -> failwith (Util.doc_to_string (PPrint.string "todo:"
                                          ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
                                                                (to_doc super))))
