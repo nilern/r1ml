@@ -119,11 +119,12 @@ module Env = struct
                 if name' = name
                 then ({env with scopes}, def)
                 else get scopes'
+            | Fn _ :: _ -> failwith "unreachable"
             | (Sig kvs | Struct kvs) :: scopes' ->
                 (match Name.Map.find_opt name kvs with
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes')
-            | (Existential _ | Universal _) :: scopes' -> get scopes'
+            | (Existential _ | Universal _ | Axiom _) :: scopes' -> get scopes'
             | [] -> raise TypeError
         in get env.scopes
 
@@ -196,7 +197,11 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.Use name ->
         let {name = _; typ} as def = lookup env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
-    | Ast.Const c -> {term = {expr with v = Const c}; typ = Int; eff = Pure}
+    | Ast.Const c ->
+        let typ = match c with
+            | Const.Int _ -> Int
+            | Const.Bool _ -> Bool in
+        {term = {expr with v = Const c}; typ; eff = Pure}
 
 and field_types env fields =
     let (defs, fields, typs, eff) = List.fold_left (fun (defs, fields, typs, eff) field ->
@@ -348,12 +353,12 @@ and articulate uv template = match uv with
 (* # Focalization *)
 
 and focalize pos env typ template = match (typ, template) with
-    | (Pi _, Pi _) ->
-        let param = {name = Name.fresh (); typ} in
-        ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
     | (Uv uv, _) ->
         let param = {name = Name.fresh (); typ} in
         ({pos; v = Fn ([], param, {pos; v = Use param})}, articulate uv template)
+    | (Pi _, Pi _) ->
+        let param = {name = Name.fresh (); typ} in
+        ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
 
 (* # Subtyping *)
 
@@ -370,8 +375,10 @@ and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov l
     let env = Env.push_axioms env axioms in
     let coerce = subtype pos occ env typ super in
     let param = {name = Name.fresh (); typ = typ} in
-    Fn ([], param, {pos; v = Axiom (axioms, {pos; v = App ( {pos; v = coerce}, []
-                                                          , {pos; v = Use param} )})})
+    let body = {Ast.pos; v = App ({pos; v = coerce}, [], {pos; v = Use param})} in
+    Fn ([], param, match axioms with
+        | _ :: _ -> {pos; v = Axiom (axioms, body)}
+        | [] -> body)
 
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
     | (([], body), ([], body')) -> subtype pos occ env body body'

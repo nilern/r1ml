@@ -8,7 +8,7 @@
     LBRACE "{" RBRACE "}"
     EOF
 %token <string> ID
-%token <int> CONST
+%token <Const.t> CONST
 
 %start <Ast.stmt list> stmts
 

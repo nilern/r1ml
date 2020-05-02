@@ -28,7 +28,7 @@ and expr
     | Select of expr with_pos * Name.t
     | Proxy of typ with_pos
     | Use of Name.t
-    | Const of int
+    | Const of Const.t
 
 and def = span * lvalue * expr with_pos
 
@@ -91,7 +91,7 @@ and expr_to_doc = function
         selectee_to_doc record ^^ PPrint.dot ^^ Name.to_doc label
     | Proxy {v = typ; _} -> PPrint.brackets (typ_to_doc typ)
     | Use name -> Name.to_doc name
-    | Const v -> PPrint.string (Int.to_string v)
+    | Const v -> Const.to_doc v
 
 and callee_to_doc = function
     | (Fn _ | If _) as callee -> PPrint.parens (expr_to_doc callee)

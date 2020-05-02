@@ -17,7 +17,7 @@ type expr
     | Record of field list
     | Proxy of abs 
     | Use of lvalue
-    | Const of int
+    | Const of Const.t
 
 and def = span * lvalue * expr with_pos
 

@@ -24,7 +24,7 @@ Library "r1ml"
     CompiledObject: best
     BuildDepends: menhirLib, sedlex.ppx, pprint
     Path: src
-    Modules: Util, Name, Ast, Parser, Lexer, SedlexMenhir, FcType, FcTerm, Typer
+    Modules: Util, Name, Const, Ast, Parser, Lexer, SedlexMenhir, FcType, FcTerm, Typer
 
 OASISFormat: 0.4
 BuildTools: ocamlbuild

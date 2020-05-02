@@ -15,6 +15,8 @@ let rec token ({stream; _} as lexbuf) =
     | "then" -> update lexbuf; THEN
     | "else" -> update lexbuf; ELSE
     | "type" -> update lexbuf; TYPE
+    | "true" -> update lexbuf; CONST (Const.Bool true)
+    | "false" -> update lexbuf; CONST (Const.Bool false)
 
     | "->" -> update lexbuf; ARROW
     | "=>" -> update lexbuf; DARROW
@@ -32,7 +34,7 @@ let rec token ({stream; _} as lexbuf) =
     | '}' -> update lexbuf; RBRACE
 
     | identifier -> update lexbuf; ID (lexeme lexbuf)
-    | integer -> update lexbuf; CONST (int_of_string (lexeme lexbuf))
+    | integer -> update lexbuf; CONST (Const.Int (int_of_string (lexeme lexbuf)))
 
     | Plus (Chars " \t\r") -> update lexbuf; token lexbuf 
     | '\n' -> update lexbuf; new_line lexbuf; token lexbuf

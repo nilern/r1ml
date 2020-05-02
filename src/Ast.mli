@@ -28,7 +28,7 @@ and expr
     | Select of expr with_pos * Name.t
     | Proxy of typ with_pos
     | Use of Name.t
-    | Const of int
+    | Const of Const.t
 
 and def = span * lvalue * expr with_pos
 

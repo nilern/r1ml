@@ -17,7 +17,7 @@ type expr
     | Record of field list
     | Proxy of abs 
     | Use of lvalue
-    | Const of int
+    | Const of Const.t
 
 and def = span * lvalue * expr with_pos
 
@@ -80,7 +80,7 @@ let rec expr_to_doc = function
             field_to_doc defs
     | Proxy typ -> PPrint.brackets (Type.abs_to_doc typ)
     | Use {name; _} -> Name.to_doc name
-    | Const v -> PPrint.string (Int.to_string v)
+    | Const c -> Const.to_doc c
 
 and callee_to_doc = function
     | (Fn _ | Cast _ | Letrec _ | Axiom _) as callee -> PPrint.parens (expr_to_doc callee)
