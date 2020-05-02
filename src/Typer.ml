@@ -427,6 +427,17 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
         Fn ([], param, {pos; v = App ( {pos; v = coerce_codomain}, []
                                      , {pos; v = App ( {pos; v = coerce_domain}, []
                                                      , {pos; v = Use param} )} )})
+    | (FcType.Record fields, FcType.Record super_fields) ->
+        let param = {name = Name.fresh (); typ = typ} in
+        let fields = List.map (fun {label; typ = super} ->
+            match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
+            | Some {label = _; typ} ->
+                let coerce = subtype pos occ env typ super in
+                {label; expr = {pos; v = App ( {pos; v = coerce}, []
+                                             , {pos; v = Select ({pos; v = Use param}, label)} )}}
+            | None -> raise TypeError
+        ) super_fields in
+        Fn ([], param, {pos; v = Record fields})
     | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
         let _ = subtype_abs pos occ env carrie carrie' in
         let _ = subtype_abs pos occ env carrie carrie' in
