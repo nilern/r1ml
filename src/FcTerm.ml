@@ -15,6 +15,7 @@ type expr
     | Cast of expr with_pos * coercion
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
+    | Select of expr with_pos * string
     | Proxy of abs 
     | Use of lvalue
     | Const of Const.t
@@ -78,6 +79,8 @@ let rec expr_to_doc = function
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc defs
+    | Select (record, label) ->
+        PPrint.prefix 4 0 (selectee_to_doc record.v) (PPrint.dot ^^ PPrint.string label)
     | Proxy typ -> PPrint.brackets (Type.abs_to_doc typ)
     | Use {name; _} -> Name.to_doc name
     | Const c -> Const.to_doc c
@@ -97,6 +100,10 @@ and axiom_to_doc (name, ((ov_name, _), _), typ) =
 and castee_to_doc = function
     | Fn _ as callee -> PPrint.parens (expr_to_doc callee)
     | callee -> expr_to_doc callee
+
+and selectee_to_doc = function
+    | (Fn _ | Cast _ | Letrec _ | Axiom _ | If _ | App _) as selectee-> PPrint.parens (expr_to_doc selectee)
+    | selectee -> expr_to_doc selectee
 
 and def_to_doc ((_, lvalue, {v = expr; _}) : def) =
     PPrint.infix 4 1 PPrint.equals (lvalue_to_doc lvalue) (expr_to_doc expr)

@@ -177,6 +177,8 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable")
+    | Ast.If _ -> (* TODO: Unification? *)
+        check env ([], Uv (Env.uv env (Name.fresh ()))) expr
     | Ast.Seal (expr, typ) ->
         let (existentials, _) as typ = kindcheck env typ in
         let res = check env typ expr in
@@ -191,6 +193,15 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         { term = {expr with v = letrec defs {expr with v = Record fields}}
         ; typ = FcType.Record field_typs
         ; eff }
+    | Ast.Select (record, label) ->
+        let {term = record; typ = record_typ; eff} = typeof env record in
+        let label = Name.to_string label in
+        let shape = FcType.Record [{label; typ = Int}] in
+        (match focalize record.pos env record_typ shape with
+        | (coerce, Record [{label = _; typ}]) ->
+            { term = {expr with v = Select ({expr with v = App (coerce, [], record)}, label)}
+            ; typ; eff}
+        | _ -> failwith "unreachable")
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
@@ -359,6 +370,12 @@ and focalize pos env typ template = match (typ, template) with
     | (Pi _, Pi _) ->
         let param = {name = Name.fresh (); typ} in
         ({pos; v = Fn ([], param, {pos; v = Use param})}, typ)
+    | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
+        (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
+        | Some {label = _; typ = field_typ} ->
+            let param = {name = Name.fresh (); typ = field_typ} in
+            ({pos; v = Fn ([], param, {pos; v = Use param})}, Record [{label; typ}])
+        | None -> raise TypeError)
 
 (* # Subtyping *)
 

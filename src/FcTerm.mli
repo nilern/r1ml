@@ -15,6 +15,7 @@ type expr
     | Cast of expr with_pos * coercion
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
+    | Select of expr with_pos * string
     | Proxy of abs 
     | Use of lvalue
     | Const of Const.t
