@@ -259,6 +259,8 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
         {term = (pos, lvalue, expr); typ; eff}
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
+    | (_, {contents = WhiteDecl _ | GreyDecl _ | BlackDecl _ | WhiteDef _ | GreyDef _; _}) ->
+        failwith "unreachable"
 
 (* # Type Elaboration *)
 
@@ -330,24 +332,53 @@ and lookup env name =
     match Env.get env name with
     | (env, ({contents = Env.WhiteDecl ({name; typ} as decl)} as binding)) ->
         binding := Env.GreyDecl decl;
-        let lvalue = {name; typ = snd (reabstract env (kindcheck env typ))} in
+        let typ = kindcheck env typ in
+        (match !binding with
+        | Env.GreyDecl _ -> 
+            let lvalue = {name; typ = snd (reabstract env typ)} in
+            binding := Env.BlackDecl lvalue;
+            lvalue
+        | Env.BlackDecl ({name = _; typ = typ'} as lvalue) ->
+            (match typ with
+            | ([], typ) ->
+                let _ = unify env typ typ' in
+                lvalue
+            | _ -> raise TypeError)
+        | _ -> failwith "unreachable")
+    | (env, ({contents = Env.GreyDecl _} as binding)) ->
+        let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackDecl lvalue;
         lvalue
-    | (env, {contents = Env.GreyDecl _}) -> raise TypeError
     | (_, {contents = Env.BlackDecl def}) -> def
 
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = Some typ} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
-        let (existentials, typ) = reabstract env (kindcheck env typ) in
-        let lvalue = {name; typ} in
-        binding := Env.BlackAnn (lvalue, expr, existentials);
-        lvalue
+        let typ = kindcheck env typ in
+        (match !binding with
+        | Env.GreyDef _ ->
+            let (existentials, typ) = reabstract env typ in
+            let lvalue = {name; typ} in
+            binding := Env.BlackAnn (lvalue, expr, existentials);
+            lvalue
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _) ->
+            (match typ with
+            | ([], typ) ->
+                let co = unify env typ typ' in (* FIXME: Use `co` *)
+                lvalue
+            | _ -> raise TypeError)
+        | _ -> failwith "unreachable")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
         let {term = expr; typ; eff} = typeof env expr in
-        let lvalue = {name; typ} in
-        binding := Env.BlackUnn (lvalue, expr, eff);
-        lvalue
+        (match !binding with
+        | Env.GreyDef _ ->
+            let lvalue = {name; typ} in
+            binding := Env.BlackUnn (lvalue, expr, eff);
+            lvalue
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _) ->
+            let coerce = subtype expr.pos true env typ typ' in (* FIXME: Use `coerce` *)
+            lvalue
+        | _ -> failwith "unreachable")
     | (env, ({contents = Env.GreyDef ({pat = name; ann = None}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackAnn (lvalue, expr, []);
@@ -443,6 +474,9 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
     | _ -> failwith (Util.doc_to_string (PPrint.string "todo:"
                                          ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
                                                                (to_doc super))))
+
+and unify env typ typ' = match (typ, typ') with
+    | (Bool, Bool) -> Refl typ
 
 (* # REPL support *)
 
