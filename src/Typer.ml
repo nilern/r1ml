@@ -415,7 +415,7 @@ and articulate pos = function
                 (match !uv' with
                 | Assigned template -> articulate pos uv_typ template
                 | Unassigned (_, level') ->
-                    if level' < level then begin
+                    if level' <= level then begin
                         uv := Assigned template;
                         template
                     end else begin
@@ -532,10 +532,18 @@ and unify_abs pos env typ typ' = match (typ, typ') with
 and unify pos env typ typ' = match (typ, typ') with
     | (Uv uv, _) ->
         (match !uv with
-        | Assigned typ -> unify pos env typ typ')
+        | Assigned typ -> unify pos env typ typ'
+        | Unassigned (_, level) ->
+            check_uv_assignee pos uv level typ';
+            uv := Assigned typ';
+            Refl typ')
     | (_, Uv uv) ->
         (match !uv with
-        | Assigned typ' -> unify pos env typ typ')
+        | Assigned typ' -> unify pos env typ typ'
+        | Unassigned (_, level) ->
+            check_uv_assignee pos uv level typ;
+            uv := Assigned typ;
+            Refl typ)
     | (Ov ov, Ov ov') ->
         (match (Env.get_implementation env ov, Env.get_implementation env ov') with
         | (Some (axname, _, typ), Some (axname', _, typ')) ->
@@ -556,6 +564,39 @@ and unify pos env typ typ' = match (typ, typ') with
         | None -> raise (TypeError pos))
     | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
     | (Int, Int) | (Bool, Bool) -> Refl typ'
+
+and check_uv_assignee_abs pos uv level = function
+    | ([], typ) -> check_uv_assignee pos uv level typ
+    | (_ :: _, _) -> raise (TypeError pos) (* not a monotype *)
+
+(* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
+and check_uv_assignee pos uv level = function
+    | Uv uv' ->
+        if uv = uv'
+        then raise (TypeError pos) (* occurs *)
+        else
+            (match !uv' with
+            | Assigned typ -> check_uv_assignee pos uv level typ
+            | Unassigned (name, level') ->
+                if level' <= level
+                then ()
+                else uv' := Unassigned (name, level)) (* hoist *)
+    | Ov (_, level') ->
+        if level' <= level
+        then ()
+        else raise (TypeError pos) (* ov would escape *)
+    | Pi ([], domain, _, codomain) ->
+        check_uv_assignee pos uv level domain;
+        check_uv_assignee_abs pos uv level codomain
+    | Pi (_ :: _, _, _, _) -> raise (TypeError pos) (* not a monotype *)
+    | Record fields ->
+        List.iter (fun {label = _; typ} -> check_uv_assignee pos uv level typ) fields
+    | Type carrie -> check_uv_assignee_abs pos uv level carrie
+    | App (callee, arg) ->
+        check_uv_assignee pos uv level callee;
+        check_uv_assignee pos uv level arg
+    | Int | Bool -> ()
+    | Use _ -> failwith "unreachable"
 
 (* # REPL support *)
 
