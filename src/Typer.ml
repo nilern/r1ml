@@ -5,6 +5,8 @@ open FcTerm
 type 'a with_pos = 'a Ast.with_pos
 
 type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
+(* Newtype to allow ignoring subtyping coercions without partial application warning: *)
+type coercer = Cf of (expr with_pos -> expr with_pos)
 
 exception TypeError
 
@@ -15,7 +17,7 @@ module Env = struct
         | BlackDecl of lvalue
         | WhiteDef of Ast.lvalue * Ast.expr with_pos
         | GreyDef of Ast.lvalue * Ast.expr with_pos
-        | BlackAnn of lvalue * Ast.expr with_pos * ov list
+        | BlackAnn of lvalue * Ast.expr with_pos * ov list * coercion option
         | BlackUnn of lvalue * expr with_pos * effect
 
     type scope
@@ -254,7 +256,7 @@ and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr 
 and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup env name in
     match Env.get env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials)}) ->
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, coercion)}) ->
         let {term = expr; typ; eff} = implement env (existentials, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
@@ -358,12 +360,13 @@ and lookup env name =
         | Env.GreyDef _ ->
             let (existentials, typ) = reabstract env typ in
             let lvalue = {name; typ} in
-            binding := Env.BlackAnn (lvalue, expr, existentials);
+            binding := Env.BlackAnn (lvalue, expr, existentials, None);
             lvalue
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _) ->
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, None) ->
             (match typ with
             | ([], typ) ->
-                let co = unify env typ typ' in (* FIXME: Use `co` *)
+                let co = unify env typ typ' in
+                binding := Env.BlackAnn (lvalue, expr, existentials, Some co);
                 lvalue
             | _ -> raise TypeError)
         | _ -> failwith "unreachable")
@@ -375,15 +378,16 @@ and lookup env name =
             let lvalue = {name; typ} in
             binding := Env.BlackUnn (lvalue, expr, eff);
             lvalue
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _) ->
-            let coerce = subtype expr.pos true env typ typ' in (* FIXME: Use `coerce` *)
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _) ->
+            let Cf coerce = subtype expr.pos true env typ typ' in
+            binding := Env.BlackUnn (lvalue, coerce expr, eff);
             lvalue
         | _ -> failwith "unreachable")
-    | (env, ({contents = Env.GreyDef ({pat = name; ann = None}, expr)} as binding)) ->
+    | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
-        binding := Env.BlackAnn (lvalue, expr, []);
+        binding := Env.BlackAnn (lvalue, expr, [], None);
         lvalue
-    | (_, {contents = Env.BlackAnn (lvalue, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
+    | (_, {contents = Env.BlackAnn (lvalue, _, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
 
 (* # Articulation *)
 
@@ -394,7 +398,9 @@ and articulate uv template = match uv with
             match template with
             | Pi _ -> Pi ([], Uv (sibling uv), Impure, ([], Uv (sibling uv)))
             | Type _ -> Type ([], Uv (sibling uv))
-            | Int | Bool -> template
+            | Int | Bool | Ov _ -> template
+            | Record _ -> raise TypeError (* no can do without row typing *)
+            | Use _ -> failwith "unreachable"
         in
         uv := Assigned typ;
         typ
@@ -422,7 +428,7 @@ and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov l
         (Name.fresh (), param, Uv (Env.uv env name))
     ) existentials in
     let env = Env.push_axioms env axioms in
-    let coerce = subtype pos occ env typ super in
+    let Cf coerce = subtype pos occ env typ super in
     match axioms with
     | _ :: _ -> fun v -> {pos; v = Axiom (axioms, coerce v)}
     | [] -> coerce
@@ -430,7 +436,7 @@ and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov l
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
     | (([], body), ([], body')) -> subtype pos occ env body body'
 
-and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
+and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
     match (typ, super) with
     | (Uv _, Uv _) -> failwith "todo"
     | (Uv uv, super) ->
@@ -444,33 +450,32 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) =
     | (typ, Ov ov) ->
         (match Env.get_implementation env ov with
         | Some (axname, _, super) ->
-            let coerce = subtype pos occ env typ super in
-            fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))}
+            let Cf coerce = subtype pos occ env typ super in
+            Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
         | None -> failwith "todo")
     | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
-        let coerce_domain = subtype pos occ env domain' domain in
+        let Cf coerce_domain = subtype pos occ env domain' domain in
         sub_eff eff eff';
-        let coerce_codomain = subtype_abs pos occ env codomain codomain' in
+        let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
         let param = {name = Name.fresh (); typ = domain} in
-        fun v ->
-            {pos; v = Fn ( [], param
-                         , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})}
+        Cf (fun v ->
+                {pos; v = Fn ( [], param
+                             , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})})
     | (FcType.Record fields, FcType.Record super_fields) ->
         let selectee = {name = Name.fresh (); typ = typ} in
         let fields = List.map (fun {label; typ = super} ->
             match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
             | Some {label = _; typ} ->
-                let coerce = subtype pos occ env typ super in
+                let Cf coerce = subtype pos occ env typ super in
                 {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
             | None -> raise TypeError
         ) super_fields in
-        fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})}
+        Cf (fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})})
     | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
         let _ = subtype_abs pos occ env carrie carrie' in
         let _ = subtype_abs pos occ env carrie carrie' in
-        fun _ -> {v = Proxy carrie'; pos}
-    | (Int, Int) | (Bool, Bool) ->
-        fun v -> v
+        Cf (fun _ -> {v = Proxy carrie'; pos})
+    | (Int, Int) | (Bool, Bool) -> Cf (fun v -> v)
     | _ -> failwith (Util.doc_to_string (PPrint.string "todo:"
                                          ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
                                                                (to_doc super))))
