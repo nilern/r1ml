@@ -34,7 +34,9 @@ and field = {label : string; typ : t}
 and coercion =
     | Refl of t
     | Symm of coercion
+    | Comp of coercion * coercion
     | AUse of Name.t
+    | TypeCo of coercion
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
@@ -102,12 +104,15 @@ and uv_to_doc uv = match !uv with
 
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
-    | Symm co -> PPrint.string "symm" ^/^ reversee_to_doc co
+    | Symm co -> PPrint.string "symm" ^/^ coercion_to_doc co
+    | Comp (co, co') ->
+        PPrint.infix 4 1 PPrint.ampersand (coercion_to_doc co) (andco_to_doc co')
     | AUse name -> Name.to_doc name
+    | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
 
-and reversee_to_doc = function
-    | Symm _ as reversee -> PPrint.parens (coercion_to_doc reversee)
-    | reversee -> coercion_to_doc reversee
+and andco_to_doc = function
+    | Comp _ as co -> PPrint.parens (coercion_to_doc co)
+    | co -> coercion_to_doc co
 
 let freshen (name, kind) = (Name.freshen name, kind)
 

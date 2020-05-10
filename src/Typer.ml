@@ -430,11 +430,12 @@ and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = ma
         (match !uv with
         | Assigned typ -> focalize pos env typ template
         | Unassigned _ -> ((fun v -> v), articulate typ template))
-    | (Pi _, Pi _) -> ((fun v -> v), typ)
+    | (Pi _, Pi _) | (Type _, Type _) -> ((fun v -> v), typ)
     | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
         | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ}])
         | None -> raise TypeError)
+    | _ -> failwith "unreachable"
 
 (* # Subtyping *)
 
@@ -459,21 +460,42 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, sup
 
 and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
     match (typ, super) with
-    | (Uv _, Uv _) -> failwith "todo"
-    | (Uv uv, super) ->
+    | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> subtype pos occ env typ super
         | Unassigned _ -> subtype pos false env (articulate typ super) super)
-    | (typ, Uv uv) ->
+    | (_, Uv uv) ->
         (match !uv with
         | Assigned super -> subtype pos occ env typ super
         | Unassigned _ -> subtype pos false env typ (articulate super typ))
-    | (typ, Ov ov) ->
+    | (Ov ov, Ov ov') ->
+        (match (Env.get_implementation env ov, Env.get_implementation env ov') with
+        | (Some (axname, _, typ), Some (axname', _, super)) ->
+            let Cf coerce = subtype pos occ env typ super in
+            Cf (fun v ->
+                {pos; v = Cast (coerce {pos; v = Cast (v, AUse axname)}, Symm (AUse axname'))})
+        | (Some (axname, _, typ), None) ->
+            let Cf coerce = subtype pos occ env typ super in
+            Cf (fun v -> coerce {pos; v = Cast (v, AUse axname)})
+        | (None, Some (axname, _, super)) ->
+            let Cf coerce = subtype pos occ env typ super in
+            Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
+        | (None, None) ->
+            if ov = ov'
+            then Cf (fun v -> v)
+            else raise TypeError)
+    | (Ov ov, _) ->
+        (match Env.get_implementation env ov with
+        | Some (axname, _, typ) ->
+            let Cf coerce = subtype pos occ env typ super in
+            Cf (fun v -> coerce {pos; v = Cast (v, AUse axname)})
+        | None -> raise TypeError)
+    | (_, Ov ov) ->
         (match Env.get_implementation env ov with
         | Some (axname, _, super) ->
             let Cf coerce = subtype pos occ env typ super in
             Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
-        | None -> failwith "todo")
+        | None -> raise TypeError)
     | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
         let Cf coerce_domain = subtype pos occ env domain' domain in
         sub_eff eff eff';
@@ -501,8 +523,36 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
                                          ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
                                                                (to_doc super))))
 
+and unify_abs env typ typ' = match (typ, typ') with
+    | (([], typ), ([], typ')) -> unify env typ typ'
+
 and unify env typ typ' = match (typ, typ') with
-    | (Bool, Bool) -> Refl typ
+    | (Uv uv, _) ->
+        (match !uv with
+        | Assigned typ -> unify env typ typ')
+    | (_, Uv uv) ->
+        (match !uv with
+        | Assigned typ' -> unify env typ typ')
+    | (Ov ov, Ov ov') ->
+        (match (Env.get_implementation env ov, Env.get_implementation env ov') with
+        | (Some (axname, _, typ), Some (axname', _, typ')) ->
+            Comp (Comp (AUse axname, unify env typ typ'), Symm (AUse axname'))
+        | (Some (axname, _, typ), None) -> Comp (AUse axname, unify env typ typ')
+        | (None, Some (axname, _, typ')) -> Comp (unify env typ typ', Symm (AUse axname))
+        | (None, None) ->
+            if ov = ov'
+            then Refl typ'
+            else raise TypeError)
+    | (Ov ov, _) ->
+        (match Env.get_implementation env ov with
+        | Some (axname, _, typ) -> Comp (AUse axname, unify env typ typ')
+        | None -> raise TypeError)
+    | (_, Ov ov) ->
+        (match Env.get_implementation env ov with
+        | Some (axname, _, typ') -> Comp (unify env typ typ', Symm (AUse axname))
+        | None -> raise TypeError)
+    | (Type carrie, Type carrie') -> TypeCo (unify_abs env carrie carrie')
+    | (Int, Int) | (Bool, Bool) -> Refl typ'
 
 (* # REPL support *)
 

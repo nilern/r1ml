@@ -39,7 +39,9 @@ and field = {label : string; typ : t}
 and coercion =
     | Refl of t
     | Symm of coercion
+    | Comp of coercion * coercion
     | AUse of Name.t
+    | TypeCo of coercion
 
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
