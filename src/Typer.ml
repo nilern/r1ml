@@ -391,24 +391,45 @@ and lookup env name =
 
 (* # Articulation *)
 
-and articulate uv template = match uv with
-    | {contents = Assigned _} -> failwith "unreachable"
-    | {contents = Unassigned _} ->
-        let typ =
-            match template with
-            | Pi _ -> Pi ([], Uv (sibling uv), Impure, ([], Uv (sibling uv)))
-            | Type _ -> Type ([], Uv (sibling uv))
-            | Int | Bool | Ov _ -> template
+and articulate = function
+    | Uv uv as uv_typ -> fun template ->
+        (match uv with
+        | {contents = Assigned _} -> failwith "unreachable"
+        | {contents = Unassigned (_, level)} ->
+            (match template with
+            | Pi _ ->
+                let typ = Pi ([], Uv (sibling uv), Impure, ([], Uv (sibling uv))) in
+                uv := Assigned typ;
+                typ
+            | Type _ ->
+                let typ = Type ([], Uv (sibling uv)) in
+                uv := Assigned typ;
+                typ
+            | Int | Bool | Ov _ ->
+                uv := Assigned template;
+                template
+            | Uv uv' ->
+                (match !uv' with
+                | Assigned template -> articulate uv_typ template
+                | Unassigned (_, level') ->
+                    if level' < level then begin
+                        uv := Assigned template;
+                        template
+                    end else begin
+                        uv' := Assigned uv_typ;
+                        uv_typ
+                    end)
             | Record _ -> raise TypeError (* no can do without row typing *)
-            | Use _ -> failwith "unreachable"
-        in
-        uv := Assigned typ;
-        typ
+            | Use _ -> failwith "unreachable"))
+    | _ -> failwith "unreachable"
 
 (* # Focalization *)
 
 and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = match (typ, template) with
-    | (Uv uv, _) -> ((fun v -> v), articulate uv template)
+    | (Uv uv, _) ->
+        (match !uv with
+        | Assigned typ -> focalize pos env typ template
+        | Unassigned _ -> ((fun v -> v), articulate typ template))
     | (Pi _, Pi _) -> ((fun v -> v), typ)
     | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
@@ -442,11 +463,11 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
     | (Uv uv, super) ->
         (match !uv with
         | Assigned typ -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env (articulate uv super) super)
+        | Unassigned _ -> subtype pos false env (articulate typ super) super)
     | (typ, Uv uv) ->
         (match !uv with
         | Assigned super -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env typ (articulate uv typ))
+        | Unassigned _ -> subtype pos false env typ (articulate super typ))
     | (typ, Ov ov) ->
         (match Env.get_implementation env ov with
         | Some (axname, _, super) ->
