@@ -18,7 +18,7 @@ let rec repl env =
     | None -> ()
     | Some input ->
         let _ = LNoise.history_add input in
-        let lexbuf = SedlexMenhir.create_lexbuf (Sedlexing.Utf8.from_string input) in
+        let lexbuf = SedlexMenhir.create_lexbuf ~file: "<REPL input>" (Sedlexing.Utf8.from_string input) in
         (try
             let stmts = SedlexMenhir.sedlex_with_menhir Lexer.token Parser.stmts lexbuf in
             let doc = PPrint.group (PPrint.separate_map (PPrint.semi ^^ PPrint.break 1) Ast.stmt_to_doc stmts) in
@@ -27,7 +27,9 @@ let rec repl env =
             print_newline ()
         with
             | SedlexMenhir.ParseError err ->
-                prerr_endline (SedlexMenhir.string_of_ParseError err));
+                prerr_endline (SedlexMenhir.string_of_ParseError err)
+            | Typer.TypeError pos ->
+                prerr_endline (Typer.type_error_to_string pos));
         repl env
 
 let () =

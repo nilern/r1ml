@@ -1,5 +1,7 @@
 type span = Lexing.position * Lexing.position
 
+val span_to_string : span -> string
+
 type 'a with_pos = {v : 'a; pos: span}
 
 type domain = {name : Name.t option; typ : typ with_pos}

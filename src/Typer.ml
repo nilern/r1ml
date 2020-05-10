@@ -8,7 +8,10 @@ type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
 type coercer = Cf of (expr with_pos -> expr with_pos)
 
-exception TypeError
+exception TypeError of span
+
+let type_error_to_string (({pos_fname; _}, _) as span : Ast.span) =
+    "Type error in " ^ pos_fname ^ " at " ^ Ast.span_to_string span
 
 module Env = struct
     type val_binder =
@@ -111,7 +114,7 @@ module Env = struct
         ) Name.Map.empty axioms in
         {env with scopes = Axiom bindings :: env.scopes}
 
-    let get env name =
+    let get pos env name =
         let rec get scopes = match scopes with
             | Repl kvs :: scopes' ->
                 (match Hashtbl.find_opt kvs name with
@@ -127,7 +130,7 @@ module Env = struct
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes')
             | (Existential _ | Universal _ | Axiom _) :: scopes' -> get scopes'
-            | [] -> raise TypeError
+            | [] -> raise (TypeError pos)
         in get env.scopes
 
     let get_implementation env ((name, _), _) =
@@ -213,7 +216,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
     | Ast.Use name ->
-        let {name = _; typ} as def = lookup env name in
+        let {name = _; typ} as def = lookup expr.pos env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
     | Ast.Const c ->
         let typ = match c with
@@ -254,8 +257,8 @@ and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr 
 (* # Definitions and Statements *)
 
 and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
-    let _ = lookup env name in
-    match Env.get env name with
+    let _ = lookup pos env name in
+    match Env.get pos env name with
     | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, coercion)}) ->
         let {term = expr; typ; eff} = implement env (existentials, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
@@ -308,19 +311,19 @@ and kindcheck env (typ : Ast.typ with_pos) =
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = Type typ; eff = Pure} -> snd (reabstract env typ)
-            | _ -> raise TypeError)
+            | _ -> raise (TypeError typ.pos))
         | Ast.Singleton expr ->
             (match typeof env expr with
             | {term = _; typ; eff = Pure} -> typ
-            | _ -> raise TypeError)
+            | _ -> raise (TypeError typ.pos))
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
             Type ([], Ov ov)
         | Ast.Int -> Int
         | Ast.Bool -> Bool
 
-    and elaborate_decl env {name; _} =
-        let {name; typ} = lookup env name in
+    and elaborate_decl env {name; typ} =
+        let {name; typ} = lookup typ.pos env name in
         {label = Name.to_string name; typ}
     in
     Env.with_existential env (fun env params ->
@@ -330,8 +333,8 @@ and kindcheck env (typ : Ast.typ with_pos) =
 
 (* # Lookup *)
 
-and lookup env name =
-    match Env.get env name with
+and lookup pos env name =
+    match Env.get pos env name with
     | (env, ({contents = Env.WhiteDecl ({name; typ} as decl)} as binding)) ->
         binding := Env.GreyDecl decl;
         let typ = kindcheck env typ in
@@ -343,9 +346,9 @@ and lookup env name =
         | Env.BlackDecl ({name = _; typ = typ'} as lvalue) ->
             (match typ with
             | ([], typ) ->
-                let _ = unify env typ typ' in
+                let _ = unify pos env typ typ' in
                 lvalue
-            | _ -> raise TypeError)
+            | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable")
     | (env, ({contents = Env.GreyDecl _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
@@ -365,10 +368,10 @@ and lookup env name =
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, None) ->
             (match typ with
             | ([], typ) ->
-                let co = unify env typ typ' in
+                let co = unify pos env typ typ' in
                 binding := Env.BlackAnn (lvalue, expr, existentials, Some co);
                 lvalue
-            | _ -> raise TypeError)
+            | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
@@ -391,7 +394,7 @@ and lookup env name =
 
 (* # Articulation *)
 
-and articulate = function
+and articulate pos = function
     | Uv uv as uv_typ -> fun template ->
         (match uv with
         | {contents = Assigned _} -> failwith "unreachable"
@@ -410,7 +413,7 @@ and articulate = function
                 template
             | Uv uv' ->
                 (match !uv' with
-                | Assigned template -> articulate uv_typ template
+                | Assigned template -> articulate pos uv_typ template
                 | Unassigned (_, level') ->
                     if level' < level then begin
                         uv := Assigned template;
@@ -419,7 +422,7 @@ and articulate = function
                         uv' := Assigned uv_typ;
                         uv_typ
                     end)
-            | Record _ -> raise TypeError (* no can do without row typing *)
+            | Record _ -> raise (TypeError pos) (* no can do without row typing *)
             | Use _ -> failwith "unreachable"))
     | _ -> failwith "unreachable"
 
@@ -429,20 +432,20 @@ and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = ma
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> focalize pos env typ template
-        | Unassigned _ -> ((fun v -> v), articulate typ template))
+        | Unassigned _ -> ((fun v -> v), articulate pos typ template))
     | (Pi _, Pi _) | (Type _, Type _) -> ((fun v -> v), typ)
     | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
         | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ}])
-        | None -> raise TypeError)
+        | None -> raise (TypeError pos))
     | _ -> failwith "unreachable"
 
 (* # Subtyping *)
 
-and sub_eff eff eff' = match (eff, eff') with
+and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Pure, Ast.Pure) -> ()
     | (Ast.Pure, Ast.Impure) -> ()
-    | (Ast.Impure, Ast.Pure) -> raise TypeError
+    | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
     | (Ast.Impure, Ast.Impure) -> ()
 
 and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov list * FcType.t) =
@@ -463,11 +466,11 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env (articulate typ super) super)
+        | Unassigned _ -> subtype pos false env (articulate pos typ super) super)
     | (_, Uv uv) ->
         (match !uv with
         | Assigned super -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env typ (articulate super typ))
+        | Unassigned _ -> subtype pos false env typ (articulate pos super typ))
     | (Ov ov, Ov ov') ->
         (match (Env.get_implementation env ov, Env.get_implementation env ov') with
         | (Some (axname, _, typ), Some (axname', _, super)) ->
@@ -483,22 +486,22 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
         | (None, None) ->
             if ov = ov'
             then Cf (fun v -> v)
-            else raise TypeError)
+            else raise (TypeError pos))
     | (Ov ov, _) ->
         (match Env.get_implementation env ov with
         | Some (axname, _, typ) ->
             let Cf coerce = subtype pos occ env typ super in
             Cf (fun v -> coerce {pos; v = Cast (v, AUse axname)})
-        | None -> raise TypeError)
+        | None -> raise (TypeError pos))
     | (_, Ov ov) ->
         (match Env.get_implementation env ov with
         | Some (axname, _, super) ->
             let Cf coerce = subtype pos occ env typ super in
             Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
-        | None -> raise TypeError)
+        | None -> raise (TypeError pos))
     | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
         let Cf coerce_domain = subtype pos occ env domain' domain in
-        sub_eff eff eff';
+        sub_eff pos eff eff';
         let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
         let param = {name = Name.fresh (); typ = domain} in
         Cf (fun v ->
@@ -511,7 +514,7 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
             | Some {label = _; typ} ->
                 let Cf coerce = subtype pos occ env typ super in
                 {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
-            | None -> raise TypeError
+            | None -> raise (TypeError pos)
         ) super_fields in
         Cf (fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})})
     | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
@@ -523,35 +526,35 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
                                          ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
                                                                (to_doc super))))
 
-and unify_abs env typ typ' = match (typ, typ') with
-    | (([], typ), ([], typ')) -> unify env typ typ'
+and unify_abs pos env typ typ' = match (typ, typ') with
+    | (([], typ), ([], typ')) -> unify pos env typ typ'
 
-and unify env typ typ' = match (typ, typ') with
+and unify pos env typ typ' = match (typ, typ') with
     | (Uv uv, _) ->
         (match !uv with
-        | Assigned typ -> unify env typ typ')
+        | Assigned typ -> unify pos env typ typ')
     | (_, Uv uv) ->
         (match !uv with
-        | Assigned typ' -> unify env typ typ')
+        | Assigned typ' -> unify pos env typ typ')
     | (Ov ov, Ov ov') ->
         (match (Env.get_implementation env ov, Env.get_implementation env ov') with
         | (Some (axname, _, typ), Some (axname', _, typ')) ->
-            Comp (Comp (AUse axname, unify env typ typ'), Symm (AUse axname'))
-        | (Some (axname, _, typ), None) -> Comp (AUse axname, unify env typ typ')
-        | (None, Some (axname, _, typ')) -> Comp (unify env typ typ', Symm (AUse axname))
+            Comp (Comp (AUse axname, unify pos env typ typ'), Symm (AUse axname'))
+        | (Some (axname, _, typ), None) -> Comp (AUse axname, unify pos env typ typ')
+        | (None, Some (axname, _, typ')) -> Comp (unify pos env typ typ', Symm (AUse axname))
         | (None, None) ->
             if ov = ov'
             then Refl typ'
-            else raise TypeError)
+            else raise (TypeError pos))
     | (Ov ov, _) ->
         (match Env.get_implementation env ov with
-        | Some (axname, _, typ) -> Comp (AUse axname, unify env typ typ')
-        | None -> raise TypeError)
+        | Some (axname, _, typ) -> Comp (AUse axname, unify pos env typ typ')
+        | None -> raise (TypeError pos))
     | (_, Ov ov) ->
         (match Env.get_implementation env ov with
-        | Some (axname, _, typ') -> Comp (unify env typ typ', Symm (AUse axname))
-        | None -> raise TypeError)
-    | (Type carrie, Type carrie') -> TypeCo (unify_abs env carrie carrie')
+        | Some (axname, _, typ') -> Comp (unify pos env typ typ', Symm (AUse axname))
+        | None -> raise (TypeError pos))
+    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
     | (Int, Int) | (Bool, Bool) -> Refl typ'
 
 (* # REPL support *)

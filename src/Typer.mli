@@ -1,3 +1,7 @@
+exception TypeError of Ast.span
+
+val type_error_to_string : Ast.span -> string
+
 type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
 
 module Env : sig
