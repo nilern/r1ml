@@ -26,6 +26,7 @@ and abs = binding list * t
 and t =
     | Pi of binding list * t * effect * abs
     | Record of field list
+    | Fn of binding * t
     | App of t * t
     | Type of abs
     | Use of binding
@@ -39,7 +40,9 @@ and field = {label : string; typ : t}
 and coercion =
     | Refl of t
     | Symm of coercion
+    | Trans of coercion * coercion
     | Comp of coercion * coercion
+    | Inst of coercion * t
     | AUse of Name.t
     | TypeCo of coercion
 

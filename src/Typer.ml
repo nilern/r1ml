@@ -267,7 +267,7 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
     | (_, {contents = WhiteDecl _ | GreyDecl _ | BlackDecl _ | WhiteDef _ | GreyDef _; _}) ->
         failwith "unreachable"
 
-(* # Type Elaboration *)
+(* # Types *)
 
 and reabstract env (params, body) =
     let params' = List.map (fun param -> Env.generate env (freshen param)) params in
@@ -330,6 +330,36 @@ and kindcheck env (typ : Ast.typ with_pos) =
         let typ = elaborate env typ in
         (!params, typ)
     )
+
+and whnf pos env = function
+    | FcType.App (callee, arg) ->
+        let (typ, co) = apply_typ pos env (whnf pos env callee) arg in
+        let (typ, co') = whnf pos env typ in
+        (typ, Trans (co, co'))
+    | Ov ov as typ ->
+        (match Env.get_implementation env ov with
+        | Some (axname, _, typ) ->
+            let (typ, co) = whnf pos env typ in
+            (typ, Trans (AUse axname, co))
+        | None -> (typ, Refl typ))
+    | Uv uv as typ ->
+        (match !uv with
+        | Assigned typ -> whnf pos env typ
+        | Unassigned _ -> (typ, Refl typ))
+    | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, Refl typ)
+    | Use _ -> failwith "unreachable"
+
+and apply_typ pos env (callee, callee_co) arg = match callee with
+    | FcType.Fn ((param, _), body) ->
+        (substitute (Name.Map.singleton param arg) body, Inst (callee_co, arg))
+    | Uv uv ->
+        (match !uv with
+        | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
+        | Unassigned _ -> raise (TypeError pos)) (* TODO: Except on root points [= â b c] *)
+    | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
+        (FcType.App (callee, arg), Inst (callee_co, arg))
+    | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
+        failwith "unreachable" (* `typeof` on path expressions should prevent this *)
 
 (* # Lookup *)
 
@@ -544,25 +574,19 @@ and unify pos env typ typ' = match (typ, typ') with
             check_uv_assignee pos uv level typ;
             uv := Assigned typ;
             Refl typ)
-    | (Ov ov, Ov ov') ->
-        (match (Env.get_implementation env ov, Env.get_implementation env ov') with
-        | (Some (axname, _, typ), Some (axname', _, typ')) ->
-            Comp (Comp (AUse axname, unify pos env typ typ'), Symm (AUse axname'))
-        | (Some (axname, _, typ), None) -> Comp (AUse axname, unify pos env typ typ')
-        | (None, Some (axname, _, typ')) -> Comp (unify pos env typ typ', Symm (AUse axname))
-        | (None, None) ->
-            if ov = ov'
-            then Refl typ'
-            else raise (TypeError pos))
-    | (Ov ov, _) ->
-        (match Env.get_implementation env ov with
-        | Some (axname, _, typ) -> Comp (AUse axname, unify pos env typ typ')
-        | None -> raise (TypeError pos))
-    | (_, Ov ov) ->
-        (match Env.get_implementation env ov with
-        | Some (axname, _, typ') -> Comp (unify pos env typ typ', Symm (AUse axname))
-        | None -> raise (TypeError pos))
-    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
+    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie') (* TODO: rooted path *)
+    | (FcType.App _, FcType.App _) | (Ov _, Ov _)->
+        let (typ, co) = whnf pos env typ in
+        let (typ', co') = whnf pos env typ' in
+        let rec unify_apps typ typ' = match (typ, typ') with
+            | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
+                Comp (unify_apps callee callee', unify pos env arg arg')
+            | (Ov ov, Ov ov') ->
+                if ov = ov'
+                then Refl typ'
+                else raise (TypeError pos)
+            | (FcType.Use _, _) | (_, FcType.Use _) -> failwith "unreachable" in
+        Trans (Trans (co, unify_apps typ typ'), Symm co')
     | (Int, Int) | (Bool, Bool) -> Refl typ'
 
 and check_uv_assignee_abs pos uv level = function

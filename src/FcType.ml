@@ -21,6 +21,7 @@ and abs = binding list * t
 and t =
     | Pi of binding list * t * effect * abs
     | Record of field list
+    | Fn of binding * t
     | App of t * t
     | Type of abs
     | Use of binding
@@ -34,7 +35,9 @@ and field = {label : string; typ : t}
 and coercion =
     | Refl of t
     | Symm of coercion
+    | Trans of coercion * coercion
     | Comp of coercion * coercion
+    | Inst of coercion * t
     | AUse of Name.t
     | TypeCo of coercion
 
@@ -105,13 +108,13 @@ and uv_to_doc uv = match !uv with
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
     | Symm co -> PPrint.string "symm" ^/^ coercion_to_doc co
-    | Comp (co, co') ->
+    | Trans (co, co') ->
         PPrint.infix 4 1 PPrint.ampersand (coercion_to_doc co) (andco_to_doc co')
     | AUse name -> Name.to_doc name
     | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
 
 and andco_to_doc = function
-    | Comp _ as co -> PPrint.parens (coercion_to_doc co)
+    | Trans _ as co -> PPrint.parens (coercion_to_doc co)
     | co -> coercion_to_doc co
 
 let freshen (name, kind) = (Name.freshen name, kind)
