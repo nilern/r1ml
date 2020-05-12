@@ -294,7 +294,7 @@ and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr 
 and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup pos env name in
     match Env.get pos env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, coercion)}) ->
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, coercion)}) -> (* FIXME: use coercion *)
         let {term = expr; typ; eff} = implement env (existentials, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
@@ -366,33 +366,46 @@ and kindcheck env (typ : Ast.typ with_pos) =
         (!params, typ)
     )
 
-and whnf pos env = function
+and whnf pos env : FcType.t -> FcType.t * coercion option = function
     | FcType.App (callee, arg) ->
-        let (typ, co) = apply_typ pos env (whnf pos env callee) arg in
+        let (typ, co) = apply_typ pos env (whnf pos env callee)  arg in
         let (typ, co') = whnf pos env typ in
-        (typ, Trans (co, co'))
+        ( typ
+        , match (co, co') with
+          | (Some co, Some co') -> Some (Trans (co, co'))
+          | (Some co, None) | (None, Some co) -> Some co
+          | (None, None) -> None )
     | Ov ov as typ ->
         (match Env.get_implementation env ov with
         | Some (axname, _, typ) ->
             let (typ, co) = whnf pos env typ in
-            (typ, Trans (AUse axname, co))
-        | None -> (typ, Refl typ))
+            ( typ
+            , match co with
+              | Some co -> Some (Trans (AUse axname, co))
+              | None -> Some (AUse axname))
+        | None -> (typ, None))
     | Uv uv as typ ->
         (match !uv with
         | Assigned typ -> whnf pos env typ
-        | Unassigned _ -> (typ, Refl typ))
-    | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, Refl typ)
+        | Unassigned _ -> (typ, None))
+    | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
     | Use _ -> failwith "unreachable"
 
-and apply_typ pos env (callee, callee_co) arg = match callee with
+and apply_typ pos env (callee, callee_co) arg : FcType.t * coercion option = match callee with
     | FcType.Fn ((param, _), body) ->
-        (substitute (Name.Map.singleton param arg) body, Inst (callee_co, arg))
+        ( substitute (Name.Map.singleton param arg) body
+        , match callee_co with
+          | Some callee_co -> Some (Inst (callee_co, arg))
+          | None -> None )
     | Uv uv ->
         (match !uv with
         | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
         | Unassigned _ -> failwith "todo")
     | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
-        (FcType.App (callee, arg), Inst (callee_co, arg))
+        ( FcType.App (callee, arg)
+        , match callee_co with
+          | Some callee_co -> Some (Inst (callee_co, arg))
+          | None -> None )
     | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
         failwith "unreachable" (* `typeof` on path expressions should prevent this *)
 
@@ -434,7 +447,7 @@ and lookup pos env name =
             (match typ with
             | ([], typ) ->
                 let co = unify pos env typ typ' in
-                binding := Env.BlackAnn (lvalue, expr, existentials, Some co);
+                binding := Env.BlackAnn (lvalue, expr, existentials, co);
                 lvalue
             | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable")
@@ -560,7 +573,7 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
                     sub_eff pos eff eff';
                     let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
 
-                    let param = {name = Name.fresh (); typ = domain} in
+                    let param = {name = Name.fresh (); typ = domain'} in
                     let arg = coerce_domain {pos; v = Use param} in
                     Cf (fun v ->
                             let body = coerce_codomain {pos; v = App (v, uvs, arg)} in
@@ -581,48 +594,71 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
             let _ = subtype_abs pos occ env carrie carrie' in
             Cf (fun _ -> {v = Proxy carrie'; pos})
         | (App _, App _) | (Ov _, Ov _) ->
-            let co = unify_whnf pos env typ super in
-            Cf (fun v -> {pos; v = Cast (v, co)})
+            (match unify_whnf pos env typ super with
+            | Some co -> Cf (fun v -> {pos; v = Cast (v, co)})
+            | None -> Cf (fun v -> v))
         | (Int, Int) | (Bool, Bool) -> Cf (fun v -> v)
         | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in subtype_whnf"
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf" in
     let (typ, co) = whnf pos env typ in
     let (super, co') = whnf pos env super in
     let Cf coerce = subtype_whnf typ super in
-    Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
+    match (co, co') with
+    | (Some co, Some co') ->
+        Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
+    | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
+    | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
+    | (None, None) -> Cf coerce
 
-and unify_abs pos env typ typ' = match (typ, typ') with
+and unify_abs pos env typ typ' : coercion option = match (typ, typ') with
     | (([], typ), ([], typ')) -> unify pos env typ typ'
 
-and unify pos env typ typ' =
+and unify pos env typ typ' : coercion option=
     let (typ, co) = whnf pos env typ in
     let (typ', co'') = whnf pos env typ' in
     let co' = unify_whnf pos env typ typ' in
-    Trans (Trans (co, co'), Symm co'')
+    match (co, co', co'') with
+    | (Some co, Some co', Some co'') -> Some (Trans (Trans (co, co'), Symm co''))
+    | (Some co, Some co', None) -> Some (Trans (co, co'))
+    | (Some co, None, Some co'') -> Some (Trans (co, Symm co''))
+    | (Some co, None, None) -> Some co
+    | (None, Some co', Some co'') -> Some (Trans (co', Symm co''))
+    | (None, Some co', None) -> Some co'
+    | (None, None, Some co'') -> Some (Symm co'')
+    | (None, None, None) -> None
 
-and unify_whnf pos env typ typ' = match (typ, typ') with
+and unify_whnf pos env typ typ' : coercion option = match (typ, typ') with
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> unify_whnf pos env typ typ'
         | Unassigned (_, level) ->
             check_uv_assignee pos uv level typ';
             uv := Assigned typ';
-            Refl typ')
+            None)
     | (_, Uv uv) ->
         (match !uv with
         | Assigned typ' -> unify_whnf pos env typ typ'
         | Unassigned (_, level) ->
             check_uv_assignee pos uv level typ;
             uv := Assigned typ;
-            Refl typ)
-    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
+            None)
+    | (Type carrie, Type carrie') ->
+        (match unify_abs pos env carrie carrie' with
+        | Some co -> Some (TypeCo co)
+        | None -> None)
     | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
-        Comp (unify_whnf pos env callee callee', unify pos env arg arg')
+        let callee_co = unify_whnf pos env callee callee' in
+        let arg_co = unify pos env arg arg' in
+        (match (callee_co, arg_co) with
+        | (Some callee_co, Some arg_co) -> Some (Comp (callee_co, arg_co))
+        | (Some callee_co, None) -> Some (Comp (callee_co, Refl arg'))
+        | (None, Some arg_co) -> Some (Comp (Refl callee', arg_co))
+        | (None, None) -> None)
     | (Ov ov, Ov ov')->
         if ov = ov'
-        then Refl typ'
+        then None
         else raise (TypeError pos)
-    | (Int, Int) | (Bool, Bool) -> Refl typ'
+    | (Int, Int) | (Bool, Bool) -> None
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
 and check_uv_assignee_abs pos uv level = function
