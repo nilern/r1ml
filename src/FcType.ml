@@ -125,17 +125,21 @@ let sibling uv = match uv with
     | {contents = Assigned _} -> failwith "unreachable"
 
 let rec substitute_abs substitution (params, body) =
+    let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
     let substitution =
-        List.fold_left (fun substitution (name, _) -> Name.Map.remove name substitution)
-                       substitution params
-    in (params, substitute substitution body)
+        List.fold_left2 (fun substitution (name, _) param' ->
+                            Name.Map.add name (Use param') substitution)
+                        substitution params params' in
+    (params', substitute substitution body)
 
 and substitute substitution = function
-    | Pi (universals, domain, eff, codomain) ->
+    | Pi (params, domain, eff, codomain) ->
+        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
-        List.fold_left (fun substitution (name, _) -> Name.Map.remove name substitution)
-                       substitution universals
-        in Pi (universals, substitute substitution domain, eff, substitute_abs substitution codomain)
+            List.fold_left2 (fun substitution (name, _) param' ->
+                                Name.Map.add name (Use param') substitution)
+                            substitution params params' in
+        Pi (params', substitute substitution domain, eff, substitute_abs substitution codomain)
     | Record fields ->
         Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
     | App (callee, arg) -> App (substitute substitution callee, substitute substitution arg)
