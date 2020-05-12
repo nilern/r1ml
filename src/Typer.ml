@@ -355,7 +355,7 @@ and apply_typ pos env (callee, callee_co) arg = match callee with
     | Uv uv ->
         (match !uv with
         | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
-        | Unassigned _ -> raise (TypeError pos)) (* TODO: Except on root points [= â b c] *)
+        | Unassigned _ -> failwith "todo")
     | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
         (FcType.App (callee, arg), Inst (callee_co, arg))
     | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
@@ -559,35 +559,34 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
 and unify_abs pos env typ typ' = match (typ, typ') with
     | (([], typ), ([], typ')) -> unify pos env typ typ'
 
-and unify pos env typ typ' = match (typ, typ') with
-    | (Uv uv, _) ->
-        (match !uv with
-        | Assigned typ -> unify pos env typ typ'
-        | Unassigned (_, level) ->
-            check_uv_assignee pos uv level typ';
-            uv := Assigned typ';
-            Refl typ')
-    | (_, Uv uv) ->
-        (match !uv with
-        | Assigned typ' -> unify pos env typ typ'
-        | Unassigned (_, level) ->
-            check_uv_assignee pos uv level typ;
-            uv := Assigned typ;
-            Refl typ)
-    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie') (* TODO: rooted path *)
-    | (FcType.App _, FcType.App _) | (Ov _, Ov _)->
-        let (typ, co) = whnf pos env typ in
-        let (typ', co') = whnf pos env typ' in
-        let rec unify_apps typ typ' = match (typ, typ') with
-            | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
-                Comp (unify_apps callee callee', unify pos env arg arg')
-            | (Ov ov, Ov ov') ->
-                if ov = ov'
-                then Refl typ'
-                else raise (TypeError pos)
-            | (FcType.Use _, _) | (_, FcType.Use _) -> failwith "unreachable" in
-        Trans (Trans (co, unify_apps typ typ'), Symm co')
-    | (Int, Int) | (Bool, Bool) -> Refl typ'
+and unify pos env typ typ' =
+    let rec unify_whnf typ typ' = match (typ, typ') with
+        | (Uv uv, _) ->
+            (match !uv with
+            | Assigned typ -> unify_whnf typ typ'
+            | Unassigned (_, level) ->
+                check_uv_assignee pos uv level typ';
+                uv := Assigned typ';
+                Refl typ')
+        | (_, Uv uv) ->
+            (match !uv with
+            | Assigned typ' -> unify_whnf typ typ'
+            | Unassigned (_, level) ->
+                check_uv_assignee pos uv level typ;
+                uv := Assigned typ;
+                Refl typ)
+        | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
+        | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
+            Comp (unify_whnf callee callee', unify pos env arg arg')
+        | (Ov ov, Ov ov')->
+            if ov = ov'
+            then Refl typ'
+            else raise (TypeError pos)
+        | (Int, Int) | (Bool, Bool) -> Refl typ' in
+    let (typ, co) = whnf pos env typ in
+    let (typ', co'') = whnf pos env typ' in
+    let co' = unify_whnf typ typ' in
+    Trans (Trans (co, co'), Symm co'')
 
 and check_uv_assignee_abs pos uv level = function
     | ([], typ) -> check_uv_assignee pos uv level typ
