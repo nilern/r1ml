@@ -13,6 +13,8 @@ type expr
     | Letrec of def list * expr with_pos
     | Axiom of (Name.t * ov * typ) list * expr with_pos
     | Cast of expr with_pos * coercion
+    | Pack of typ list * expr with_pos
+    | Unpack of FcType.binding list * lvalue * expr with_pos * expr with_pos
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
     | Select of expr with_pos * string
@@ -75,6 +77,20 @@ let rec expr_to_doc = function
             ^/^ expr_to_doc body.v)
     | Cast ({v = expr; _}, coercion) ->
         PPrint.infix 4 1 (PPrint.string "|>") (castee_to_doc expr) (coercion_to_doc coercion)
+    | Pack (existentials, impl) ->
+        PPrint.string "pack" ^^ PPrint.break 1
+            ^^ PPrint.angles (PPrint.separate_map (PPrint.comma ^^ PPrint.break 1) FcType.to_doc existentials
+                                ^^ PPrint.comma ^/^ expr_to_doc impl.v)
+    | Unpack (existentials, lvalue, expr, body) ->
+        PPrint.group(
+            PPrint.surround 4 1
+                (PPrint.string "unpack"
+                    ^/^ PPrint.angles (PPrint.separate_map (PPrint.comma ^^ PPrint.break 1)
+                                        FcType.binding_to_doc existentials
+                                        ^^ PPrint.comma ^/^ lvalue_to_doc lvalue) ^/^ PPrint.equals)
+                (expr_to_doc expr.v)
+                (PPrint.string "in")
+            ^/^ expr_to_doc body.v)
     | Record defs ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace

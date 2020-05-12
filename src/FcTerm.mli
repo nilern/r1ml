@@ -13,6 +13,8 @@ type expr
     | Letrec of def list * expr with_pos
     | Axiom of (Name.t * ov * typ) list * expr with_pos
     | Cast of expr with_pos * coercion
+    | Pack of typ list * expr with_pos
+    | Unpack of FcType.binding list * lvalue * expr with_pos * expr with_pos
     | If of expr with_pos * expr with_pos * expr with_pos
     | Record of field list
     | Select of expr with_pos * string

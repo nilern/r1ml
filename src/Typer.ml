@@ -90,6 +90,18 @@ module Env = struct
               (substitute substitution domain)
         )
 
+    let skolemizing_abs ({scopes; current_level} as env) (existentials, body) f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let existentials' = List.map FcType.freshen existentials in
+            let skolems = List.map (fun binding -> (binding, level)) existentials' in
+            let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty skolems in
+            f {env with scopes = Existential (ref existentials', level) :: scopes}
+              (existentials', substitute substitution body)
+        )
+
     let skolemizing_arrow ({scopes; current_level} as env) (universals, domain, eff, codomain) f =
         with_incremented_level env (fun () ->
             let level = !current_level in
@@ -155,6 +167,13 @@ module Env = struct
             | [] -> None
         in get env.scopes
 end
+
+let instantiate_abs env (existentials, body) =
+    let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) existentials in
+    let substitution = List.fold_left2 (fun substitution (name, _) uv ->
+            Name.Map.add name uv substitution
+    ) Name.Map.empty existentials uvs in
+    (uvs, substitute substitution body)
 
 let instantiate_arrow env (universals, domain, eff, codomain) =
     let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
@@ -504,8 +523,18 @@ and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov l
     | _ :: _ -> fun v -> {pos; v = Axiom (axioms, coerce v)}
     | [] -> coerce
 
-and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, super) with
-    | (([], body), ([], body')) -> subtype pos occ env body body'
+and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
+    Env.skolemizing_abs env typ (fun env (existentials, typ) ->
+        let (uvs, super) = instantiate_abs env super in
+
+        let Cf coerce = subtype pos occ env typ super in
+
+        let impl = {name = Name.fresh (); typ} in
+        let impl_use = {Ast.pos; v = Use impl} in
+        Cf (fun v ->
+                let body = {Ast.pos; v = Pack (uvs, coerce impl_use)} in
+                {pos; v = Unpack (existentials, impl, v, body)})
+    )
 
 and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
     let rec subtype_whnf typ super = match (typ, super) with
@@ -528,8 +557,8 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
                     let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
 
                     let param = {name = Name.fresh (); typ = domain} in
+                    let arg = coerce_domain {pos; v = Use param} in
                     Cf (fun v ->
-                            let arg = coerce_domain {pos; v = Use param} in
                             let body = coerce_codomain {pos; v = App (v, uvs, arg)} in
                             {pos; v = Fn (universals', param, body)})
                 )
