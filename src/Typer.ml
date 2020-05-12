@@ -90,6 +90,18 @@ module Env = struct
               (substitute substitution domain)
         )
 
+    let skolemizing_arrow ({scopes; current_level} as env) (universals, domain, eff, codomain) f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let universals' = List.map FcType.freshen universals in
+            let skolems = List.map (fun binding -> (binding, level)) universals' in
+            let substitution = List.fold_left2 (fun substitution (name, _) skolem ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty universals skolems in
+            f {env with scopes = Universal skolems :: scopes}
+              (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
+        )
+
     let uv {current_level = {contents = level}; _} binding =
         ref (Unassigned (binding, level))
 
@@ -144,6 +156,13 @@ module Env = struct
         in get env.scopes
 end
 
+let instantiate_arrow env (universals, domain, eff, codomain) =
+    let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
+    let substitution = List.fold_left2 (fun substitution (name, _) uv ->
+            Name.Map.add name uv substitution
+    ) Name.Map.empty universals uvs in
+    (uvs, substitute substitution domain, eff, substitute_abs substitution codomain)
+
 (* # Effects *)
 
 let join_effs eff eff' = match (eff, eff') with
@@ -172,12 +191,9 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let callee = {name = Name.fresh (); typ = callee_typ} in
         (match focalize callee_expr.pos env callee_typ (Pi ([], Int, Impure, ([], Int))) with
         | (coerce, Pi (universals, domain, app_eff, codomain)) ->
-            let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
-            let substitution = List.fold_left2 (fun substitution (name, _) uv ->
-                Name.Map.add name uv substitution
-            ) Name.Map.empty universals uvs in
-            let domain = substitute substitution domain in
-            let codomain = substitute_abs substitution codomain in
+            let (uvs, domain, app_eff, codomain) =
+                instantiate_arrow env (universals, domain, app_eff, codomain) in
+
             let {term = arg; typ = _; eff = arg_eff} = check env ([], domain) arg in
             { term = { pos = callee_expr.pos
                      ; v = Letrec ( [(callee_expr.pos, callee, callee_expr)]
@@ -501,14 +517,22 @@ and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
             (match !uv with
             | Assigned super -> subtype pos occ env typ super
             | Unassigned _ -> subtype pos false env typ (articulate pos super typ))
-        | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
-            let Cf coerce_domain = subtype pos occ env domain' domain in
-            sub_eff pos eff eff';
-            let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
-            let param = {name = Name.fresh (); typ = domain} in
-            Cf (fun v ->
-                    {pos; v = Fn ( [], param
-                                 , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})})
+        | (Pi (universals, domain, eff, codomain), Pi (universals', domain', eff', codomain')) ->
+            Env.skolemizing_arrow env (universals', domain', eff', codomain')
+                (fun env (universals', domain', eff', codomain') ->
+                    let (uvs, domain, eff, codomain) =
+                        instantiate_arrow env (universals, domain, eff, codomain) in
+
+                    let Cf coerce_domain = subtype pos occ env domain' domain in
+                    sub_eff pos eff eff';
+                    let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
+
+                    let param = {name = Name.fresh (); typ = domain} in
+                    Cf (fun v ->
+                            let arg = coerce_domain {pos; v = Use param} in
+                            let body = coerce_codomain {pos; v = App (v, uvs, arg)} in
+                            {pos; v = Fn (universals', param, body)})
+                )
         | (FcType.Record fields, FcType.Record super_fields) ->
             let selectee = {name = Name.fresh (); typ = typ} in
             let fields = List.map (fun {label; typ = super} ->
