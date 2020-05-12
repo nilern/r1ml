@@ -109,7 +109,8 @@ let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
     | Symm co -> PPrint.string "symm" ^/^ coercion_to_doc co
     | Trans (co, co') ->
-        PPrint.infix 4 1 PPrint.ampersand (coercion_to_doc co) (andco_to_doc co')
+        PPrint.infix 4 1 (PPrint.bquotes (PPrint.string "o"))
+            (coercion_to_doc co) (andco_to_doc co')
     | AUse name -> Name.to_doc name
     | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
 
@@ -123,6 +124,17 @@ let sibling uv = match uv with
     | {contents = Unassigned (_, level)} ->
         ref (Unassigned (Name.fresh (), level))
     | {contents = Assigned _} -> failwith "unreachable"
+
+(* NOTE: On scope entry hygienic substitution requires that:
+    1. Shadowing be honoured, e.g. [b/a](forall a . a) = forall a . a (_not_ forall a . b)
+       Effectively need to ensure that the domain of the substitution does not intersect
+       with the params.
+    2. introduced reference capture be avoided, e.g. [b/a](forall b . a) = forall c . b
+       (_not_ forall b . b). Effectively need to ensure that the codomain of the substitution
+       does not contain references to the params.
+    The first one could be achieved by removing the params from the substitution. For the
+    second one, binders need to be renamed, which also achieves the first one. The required
+    renaming can be incorporated into the substitution. *)
 
 let rec substitute_abs substitution (params, body) =
     let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in

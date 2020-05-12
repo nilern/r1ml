@@ -492,101 +492,81 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) = match (typ, sup
     | (([], body), ([], body')) -> subtype pos occ env body body'
 
 and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
-    match (typ, super) with
-    | (Uv uv, _) ->
-        (match !uv with
-        | Assigned typ -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env (articulate pos typ super) super)
-    | (_, Uv uv) ->
-        (match !uv with
-        | Assigned super -> subtype pos occ env typ super
-        | Unassigned _ -> subtype pos false env typ (articulate pos super typ))
-    | (Ov ov, Ov ov') ->
-        (match (Env.get_implementation env ov, Env.get_implementation env ov') with
-        | (Some (axname, _, typ), Some (axname', _, super)) ->
-            let Cf coerce = subtype pos occ env typ super in
+    let rec subtype_whnf typ super = match (typ, super) with
+        | (Uv uv, _) ->
+            (match !uv with
+            | Assigned typ -> subtype pos occ env typ super
+            | Unassigned _ -> subtype pos false env (articulate pos typ super) super)
+        | (_, Uv uv) ->
+            (match !uv with
+            | Assigned super -> subtype pos occ env typ super
+            | Unassigned _ -> subtype pos false env typ (articulate pos super typ))
+        | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
+            let Cf coerce_domain = subtype pos occ env domain' domain in
+            sub_eff pos eff eff';
+            let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
+            let param = {name = Name.fresh (); typ = domain} in
             Cf (fun v ->
-                {pos; v = Cast (coerce {pos; v = Cast (v, AUse axname)}, Symm (AUse axname'))})
-        | (Some (axname, _, typ), None) ->
-            let Cf coerce = subtype pos occ env typ super in
-            Cf (fun v -> coerce {pos; v = Cast (v, AUse axname)})
-        | (None, Some (axname, _, super)) ->
-            let Cf coerce = subtype pos occ env typ super in
-            Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
-        | (None, None) ->
-            if ov = ov'
-            then Cf (fun v -> v)
-            else raise (TypeError pos))
-    | (Ov ov, _) ->
-        (match Env.get_implementation env ov with
-        | Some (axname, _, typ) ->
-            let Cf coerce = subtype pos occ env typ super in
-            Cf (fun v -> coerce {pos; v = Cast (v, AUse axname)})
-        | None -> raise (TypeError pos))
-    | (_, Ov ov) ->
-        (match Env.get_implementation env ov with
-        | Some (axname, _, super) ->
-            let Cf coerce = subtype pos occ env typ super in
-            Cf (fun v -> {pos; v = Cast (coerce v, Symm (AUse axname))})
-        | None -> raise (TypeError pos))
-    | (Pi ([], domain, eff, codomain), Pi ([], domain', eff', codomain')) -> (* TODO: non-[] *)
-        let Cf coerce_domain = subtype pos occ env domain' domain in
-        sub_eff pos eff eff';
-        let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
-        let param = {name = Name.fresh (); typ = domain} in
-        Cf (fun v ->
-                {pos; v = Fn ( [], param
-                             , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})})
-    | (FcType.Record fields, FcType.Record super_fields) ->
-        let selectee = {name = Name.fresh (); typ = typ} in
-        let fields = List.map (fun {label; typ = super} ->
-            match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
-            | Some {label = _; typ} ->
-                let Cf coerce = subtype pos occ env typ super in
-                {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
-            | None -> raise (TypeError pos)
-        ) super_fields in
-        Cf (fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})})
-    | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
-        let _ = subtype_abs pos occ env carrie carrie' in
-        let _ = subtype_abs pos occ env carrie carrie' in
-        Cf (fun _ -> {v = Proxy carrie'; pos})
-    | (Int, Int) | (Bool, Bool) -> Cf (fun v -> v)
-    | _ -> failwith (Util.doc_to_string (PPrint.string "todo:"
-                                         ^/^ (PPrint.infix 4 1 (PPrint.string "<:") (to_doc typ)
-                                                               (to_doc super))))
+                    {pos; v = Fn ( [], param
+                                 , coerce_codomain {pos; v = App (v, [], coerce_domain {pos; v = Use param})})})
+        | (FcType.Record fields, FcType.Record super_fields) ->
+            let selectee = {name = Name.fresh (); typ = typ} in
+            let fields = List.map (fun {label; typ = super} ->
+                match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
+                | Some {label = _; typ} ->
+                    let Cf coerce = subtype pos occ env typ super in
+                    {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
+                | None -> raise (TypeError pos)
+            ) super_fields in
+            Cf (fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})})
+        | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
+            let _ = subtype_abs pos occ env carrie carrie' in
+            let _ = subtype_abs pos occ env carrie carrie' in
+            Cf (fun _ -> {v = Proxy carrie'; pos})
+        | (App _, App _) | (Ov _, Ov _) ->
+            let co = unify_whnf pos env typ super in
+            Cf (fun v -> {pos; v = Cast (v, co)})
+        | (Int, Int) | (Bool, Bool) -> Cf (fun v -> v)
+        | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in subtype_whnf"
+        | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf" in
+    let (typ, co) = whnf pos env typ in
+    let (super, co') = whnf pos env super in
+    let Cf coerce = subtype_whnf typ super in
+    Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
 
 and unify_abs pos env typ typ' = match (typ, typ') with
     | (([], typ), ([], typ')) -> unify pos env typ typ'
 
 and unify pos env typ typ' =
-    let rec unify_whnf typ typ' = match (typ, typ') with
-        | (Uv uv, _) ->
-            (match !uv with
-            | Assigned typ -> unify_whnf typ typ'
-            | Unassigned (_, level) ->
-                check_uv_assignee pos uv level typ';
-                uv := Assigned typ';
-                Refl typ')
-        | (_, Uv uv) ->
-            (match !uv with
-            | Assigned typ' -> unify_whnf typ typ'
-            | Unassigned (_, level) ->
-                check_uv_assignee pos uv level typ;
-                uv := Assigned typ;
-                Refl typ)
-        | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
-        | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
-            Comp (unify_whnf callee callee', unify pos env arg arg')
-        | (Ov ov, Ov ov')->
-            if ov = ov'
-            then Refl typ'
-            else raise (TypeError pos)
-        | (Int, Int) | (Bool, Bool) -> Refl typ' in
     let (typ, co) = whnf pos env typ in
     let (typ', co'') = whnf pos env typ' in
-    let co' = unify_whnf typ typ' in
+    let co' = unify_whnf pos env typ typ' in
     Trans (Trans (co, co'), Symm co'')
+
+and unify_whnf pos env typ typ' = match (typ, typ') with
+    | (Uv uv, _) ->
+        (match !uv with
+        | Assigned typ -> unify_whnf pos env typ typ'
+        | Unassigned (_, level) ->
+            check_uv_assignee pos uv level typ';
+            uv := Assigned typ';
+            Refl typ')
+    | (_, Uv uv) ->
+        (match !uv with
+        | Assigned typ' -> unify_whnf pos env typ typ'
+        | Unassigned (_, level) ->
+            check_uv_assignee pos uv level typ;
+            uv := Assigned typ;
+            Refl typ)
+    | (Type carrie, Type carrie') -> TypeCo (unify_abs pos env carrie carrie')
+    | (FcType.App (callee, arg), FcType.App (callee', arg')) ->
+        Comp (unify_whnf pos env callee callee', unify pos env arg arg')
+    | (Ov ov, Ov ov')->
+        if ov = ov'
+        then Refl typ'
+        else raise (TypeError pos)
+    | (Int, Int) | (Bool, Bool) -> Refl typ'
+    | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
 and check_uv_assignee_abs pos uv level = function
     | ([], typ) -> check_uv_assignee pos uv level typ
