@@ -530,10 +530,14 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
         let Cf coerce = subtype pos occ env typ super in
 
         let impl = {name = Name.fresh (); typ} in
-        let impl_use = {Ast.pos; v = Use impl} in
+        let body = coerce {Ast.pos; v = Use impl} in
+        let body = match uvs with
+            | _ :: _ -> {Ast.pos; v = Pack (uvs, body)}
+            | [] -> body in
         Cf (fun v ->
-                let body = {Ast.pos; v = Pack (uvs, coerce impl_use)} in
-                {pos; v = Unpack (existentials, impl, v, body)})
+                match existentials with
+                | _ :: _ -> {pos; v = Unpack (existentials, impl, v, body)}
+                | [] -> {pos; v = Letrec ([(pos, impl, v)], body)})
     )
 
 and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =

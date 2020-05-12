@@ -107,7 +107,7 @@ and uv_to_doc uv = match !uv with
 
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
-    | Symm co -> PPrint.string "symm" ^/^ coercion_to_doc co
+    | Symm co -> PPrint.string "symm" ^^ PPrint.blank 1 ^^ coercion_to_doc co
     | Trans (co, co') ->
         PPrint.infix 4 1 (PPrint.bquotes (PPrint.string "o"))
             (coercion_to_doc co) (andco_to_doc co')

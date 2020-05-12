@@ -78,16 +78,18 @@ let rec expr_to_doc = function
     | Cast ({v = expr; _}, coercion) ->
         PPrint.infix 4 1 (PPrint.string "|>") (castee_to_doc expr) (coercion_to_doc coercion)
     | Pack (existentials, impl) ->
-        PPrint.string "pack" ^^ PPrint.break 1
-            ^^ PPrint.angles (PPrint.separate_map (PPrint.comma ^^ PPrint.break 1) FcType.to_doc existentials
-                                ^^ PPrint.comma ^/^ expr_to_doc impl.v)
+        PPrint.string "pack" ^^ PPrint.blank 1
+            ^^ PPrint.surround_separate 4 0 PPrint.empty
+                PPrint.langle (PPrint.comma ^^ PPrint.break 1) PPrint.rangle
+                (List.map FcType.to_doc existentials @ [expr_to_doc impl.v])
     | Unpack (existentials, lvalue, expr, body) ->
         PPrint.group(
             PPrint.surround 4 1
-                (PPrint.string "unpack"
-                    ^/^ PPrint.angles (PPrint.separate_map (PPrint.comma ^^ PPrint.break 1)
-                                        FcType.binding_to_doc existentials
-                                        ^^ PPrint.comma ^/^ lvalue_to_doc lvalue) ^/^ PPrint.equals)
+                (PPrint.string "unpack" ^^ PPrint.blank 1
+                    ^^ PPrint.surround_separate 4 0 PPrint.empty
+                        PPrint.langle (PPrint.comma ^^ PPrint.break 1) PPrint.rangle
+                        (List.map FcType.binding_to_doc existentials @ [lvalue_to_doc lvalue])
+                    ^^ PPrint.blank 1 ^^ PPrint.equals)
                 (expr_to_doc expr.v)
                 (PPrint.string "in")
             ^/^ expr_to_doc body.v)
@@ -102,11 +104,11 @@ let rec expr_to_doc = function
     | Const c -> Const.to_doc c
 
 and callee_to_doc = function
-    | (Fn _ | Cast _ | Letrec _ | Axiom _) as callee -> PPrint.parens (expr_to_doc callee)
+    | (Fn _ | Cast _ | Letrec _ | Axiom _ | Unpack _) as callee -> PPrint.parens (expr_to_doc callee)
     | callee -> expr_to_doc callee
 
 and arg_to_doc = function
-    | (Fn _ | Cast _ | Letrec _ | Axiom _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
+    | (Fn _ | Cast _ | Letrec _ | Axiom _ | Unpack _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
     | arg -> expr_to_doc arg
 
 and axiom_to_doc (name, ((ov_name, _), _), typ) =
