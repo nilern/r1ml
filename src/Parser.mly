@@ -1,4 +1,10 @@
-%{ open Ast %}
+%{
+open Ast
+
+let path = function
+    | Proxy typ -> typ.v
+    | expr -> Path expr
+%}
 
 %token
     IF "if" THEN "then" ELSE "else" FUN "fun" TYPE "type"
@@ -85,7 +91,7 @@ def
 typ
     : domain=domain "=>" codomain=typ { {v = Pi (domain, Pure, codomain); pos = $sloc} }
     | domain=domain "->" codomain=typ { {v = Pi (domain, Impure, codomain); pos = $sloc} }
-    | exprf(typ_nestable) { {v = Path $1.v; pos = $sloc} }
+    | exprf(typ_nestable) { {v = path $1.v; pos = $sloc} }
 
 typ_nestable : typ_nestable_impl { {v = Proxy {v = $1; pos = $sloc}; pos = $sloc} }
 
@@ -93,10 +99,10 @@ typ_nestable_impl
     : "{" decls=separated_list(";", decl) "}" { Sig decls }
     | "type" { Type }
     | "(" typ ")" { $2.v }
-    | common_nestable { Path $1 }
+    | common_nestable { path $1 }
 
 domain
-    : exprf(typ_nestable) { {name = None; typ = {v = Path $1.v; pos = $sloc}} }
+    : exprf(typ_nestable) { {name = None; typ = {v = path $1.v; pos = $sloc}} }
     | "(" name=ID ":" typ=typ ")" { {name = Some (Name.of_string name); typ} }
 
 ann
