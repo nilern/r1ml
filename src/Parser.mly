@@ -1,9 +1,10 @@
 %{
 open Ast
 
-let path = function
-    | Proxy typ -> typ.v
-    | expr -> Path expr
+let unpath typ =
+    {typ with v = match typ.v with
+                  | Path expr -> expr
+                  | _ -> Proxy typ }
 %}
 
 %token
@@ -22,20 +23,6 @@ let path = function
 
 (* # Expressions *)
 
-exprf(nestable)
-    : "if" exprf(nestable) "then" exprf(nestable) "else" exprf(nestable) {
-        {v = If ($2, $4, $6); pos = $sloc}
-    }
-    | appf(nestable) { $1 }
-
-appf(nestable)
-    : appf(nestable) selectf(nestable) { {v = App ($1, $2); pos = $sloc} }
-    | selectf(nestable) { $1 }
-
-selectf(nestable)
-    : record=selectf(nestable) "." label=ID { {v = Select (record, Name.of_string label); pos = $sloc} }
-    | nestable { $1 }
-
 expr
     : "fun" param=param "=>" body=expr { {v = Fn (param, body); pos = $sloc} }
     | seal_expr { $1 }
@@ -44,7 +31,19 @@ seal_expr
     : expr=seal_expr ":>" ann=typ { {v = Seal (expr, ann); pos = $sloc} }
     | simple_expr { $1 }
 
-simple_expr : exprf(expr_nestable) { $1 }
+simple_expr
+    : "if" expr "then" simple_expr "else" simple_expr {
+        {v = If ($2, $4, $6); pos = $sloc}
+    }
+    | app { $1 }
+
+app
+    : app select { {v = App ($1, $2); pos = $sloc} }
+    | select { $1 }
+
+select
+    : record=select "." label=ID { {v = Select (record, Name.of_string label); pos = $sloc} }
+    | expr_nestable { $1 }
 
 expr_nestable : expr_nestable_impl { {v = $1; pos = $sloc} }
 
@@ -91,19 +90,35 @@ def
 typ
     : domain=domain "=>" codomain=typ { {v = Pi (domain, Pure, codomain); pos = $sloc} }
     | domain=domain "->" codomain=typ { {v = Pi (domain, Impure, codomain); pos = $sloc} }
-    | exprf(typ_nestable) { {v = path $1.v; pos = $sloc} }
+    | simple_typ { $1 }
 
-typ_nestable : typ_nestable_impl { {v = Proxy {v = $1; pos = $sloc}; pos = $sloc} }
+domain
+    : simple_typ { {name = None; typ = $1} }
+    | "(" name=ID ":" typ=typ ")" { {name = Some (Name.of_string name); typ} }
+
+simple_typ
+    : "if" expr "then" simple_typ "else" simple_typ {
+        {v = Path (If ($2, unpath $4, unpath $6)); pos = $sloc}
+    }
+    | app_typ { $1 }
+
+app_typ
+    : app_typ select_typ { {v = Path (App (unpath $1, unpath $2)); pos = $sloc} }
+    | select_typ { $1 }
+
+select_typ
+    : record=select_typ "." label=ID {
+        {v = Path (Select (unpath record, Name.of_string label)); pos = $sloc}
+    }
+    | typ_nestable { $1 }
+
+typ_nestable : typ_nestable_impl { {v = $1; pos = $sloc} }
 
 typ_nestable_impl
     : "{" decls=separated_list(";", decl) "}" { Sig decls }
     | "type" { Type }
     | "(" typ ")" { $2.v }
-    | common_nestable { path $1 }
-
-domain
-    : exprf(typ_nestable) { {name = None; typ = {v = path $1.v; pos = $sloc}} }
-    | "(" name=ID ":" typ=typ ")" { {name = Some (Name.of_string name); typ} }
+    | common_nestable { Path $1 }
 
 ann
     : ":" typ=typ { Some typ }
