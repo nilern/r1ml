@@ -5,7 +5,10 @@ open FcTerm
 type 'a with_pos = 'a Ast.with_pos
 
 type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
+
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
+(* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
+         or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (expr with_pos -> expr with_pos)
 
 exception TypeError of span
@@ -366,49 +369,51 @@ and kindcheck env (typ : Ast.typ with_pos) =
         (!params, typ)
     )
 
-and whnf pos env : FcType.t -> FcType.t * coercion option = function
-    | FcType.App (callee, arg) ->
-        let (typ, co) = apply_typ pos env (whnf pos env callee)  arg in
-        let (typ, co') = whnf pos env typ in
-        ( typ
-        , match (co, co') with
-          | (Some co, Some co') -> Some (Trans (co, co'))
-          | (Some co, None) | (None, Some co) -> Some co
-          | (None, None) -> None )
-    | Ov ov as typ ->
-        (match Env.get_implementation env ov with
-        | Some (axname, _, typ) ->
-            let (typ, co) = whnf pos env typ in
+and whnf pos env typ : FcType.t * coercion option =
+    let rec eval : FcType.t -> FcType.t * coercion option = function
+        | FcType.App (callee, arg) ->
+            let (typ, co) = apply (eval callee) arg in
+            let (typ, co') = eval typ in
             ( typ
-            , match co with
-              | Some co -> Some (Trans (AUse axname, co))
-              | None -> Some (AUse axname))
-        | None -> (typ, None))
-    | Uv uv as typ ->
-        (match !uv with
-        | Assigned typ -> whnf pos env typ
-        | Unassigned _ -> (typ, None))
-    | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
-    | Use _ -> failwith "unreachable"
+            , match (co, co') with
+              | (Some co, Some co') -> Some (Trans (co, co'))
+              | (Some co, None) | (None, Some co) -> Some co
+              | (None, None) -> None )
+        | Ov ov as typ ->
+            (match Env.get_implementation env ov with
+            | Some (axname, _, typ) ->
+                let (typ, co) = eval typ in
+                ( typ
+                , match co with
+                  | Some co -> Some (Trans (AUse axname, co))
+                  | None -> Some (AUse axname))
+            | None -> (typ, None))
+        | Uv uv as typ ->
+            (match !uv with
+            | Assigned typ -> eval typ
+            | Unassigned _ -> (typ, None))
+        | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
+        | Use _ -> failwith "unreachable"
 
-and apply_typ pos env (callee, callee_co) arg : FcType.t * coercion option = match callee with
-    | FcType.Fn ((param, _), body) ->
-        ( substitute (Name.Map.singleton param arg) body
-        , match callee_co with
-          | Some callee_co -> Some (Inst (callee_co, arg))
-          | None -> None )
-    | Uv uv ->
-        (match !uv with
-        | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
-        | Unassigned _ -> failwith "todo")
-    | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
-        ( FcType.App (callee, arg)
-        , match callee_co with
-          | Some callee_co -> Some (Inst (callee_co, arg))
-          | None -> None )
-    | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
-        failwith "unreachable" (* `typeof` on path expressions should prevent this *)
-
+    and apply (callee, callee_co) arg : FcType.t * coercion option = match callee with
+        | FcType.Fn ((param, _), body) ->
+            ( substitute (Name.Map.singleton param arg) body
+            , match callee_co with
+              | Some callee_co -> Some (Inst (callee_co, arg))
+              | None -> None )
+        | Uv uv ->
+            (match !uv with
+            | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
+            | Unassigned _ -> failwith "todo")
+        | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
+            ( FcType.App (callee, arg)
+            , match callee_co with
+              | Some callee_co -> Some (Inst (callee_co, arg))
+              | None -> None )
+        | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
+            failwith "unreachable" (* `typeof` on path expressions should prevent this *)
+    in eval typ
+    
 (* # Lookup *)
 
 and lookup pos env name =
@@ -461,7 +466,7 @@ and lookup pos env name =
             lvalue
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _) ->
             let Cf coerce = subtype expr.pos true env typ typ' in
-            binding := Env.BlackUnn (lvalue, coerce expr, eff);
+            binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             lvalue
         | _ -> failwith "unreachable")
     | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
