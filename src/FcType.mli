@@ -26,7 +26,7 @@ and abs = binding list * t
 and t =
     | Pi of binding list * t * effect * abs
     | Record of field list
-    | Fn of binding * t
+    | Fn of Name.t * t
     | App of t * t
     | Type of abs
     | Use of binding

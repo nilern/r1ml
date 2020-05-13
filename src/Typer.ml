@@ -370,49 +370,46 @@ and kindcheck env (typ : Ast.typ with_pos) =
     )
 
 and whnf pos env typ : FcType.t * coercion option =
-    let rec eval : FcType.t -> FcType.t * coercion option = function
-        | FcType.App (callee, arg) ->
-            let (typ, co) = apply (eval callee) arg in
-            let (typ, co') = eval typ in
-            ( typ
-            , match (co, co') with
-              | (Some co, Some co') -> Some (Trans (co, co'))
-              | (Some co, None) | (None, Some co) -> Some co
-              | (None, None) -> None )
+    let rec eval (stack : FcType.t list) : FcType.t -> FcType.t * coercion option = function
+        (* Purely interpreting version of Krivine's call-by-name machine,
+           with various extensions and coercion type evidence generation: *)
+        | App (callee, arg) -> eval (arg :: stack) callee
+        | Fn (param, body) ->
+            (match stack with
+            | arg :: stack' ->
+                let (typ, co) = eval stack' (substitute (Name.Map.singleton param arg) body) in
+                ( typ
+                , match co with
+                  | Some co -> Some (Inst (co, arg))
+                  | None -> None )
+            | [] -> failwith "unreachable")
         | Ov ov as typ ->
             (match Env.get_implementation env ov with
             | Some (axname, _, typ) ->
-                let (typ, co) = eval typ in
+                let (typ, co) = eval stack typ in
                 ( typ
                 , match co with
                   | Some co -> Some (Trans (AUse axname, co))
-                  | None -> Some (AUse axname))
-            | None -> (typ, None))
+                  | None -> Some (AUse axname) )
+            | None ->
+                let step typ arg = FcType.App (typ, arg) in
+                (List.fold_left step typ stack, None))
         | Uv uv as typ ->
             (match !uv with
-            | Assigned typ -> eval typ
-            | Unassigned _ -> (typ, None))
-        | (FcType.Fn _ | Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
+            | Assigned typ -> eval stack typ
+            | Unassigned _ ->
+                (match stack with
+                | _ :: _ ->
+                    let step arg body = match arg with
+                        | Ov ((name, _), _) -> FcType.Fn (name, body)
+                        | _ -> failwith "unreachable: unassigned uv with non-ov arg in `whnf`" in
+                    let f = List.fold_right step stack (Uv (sibling uv)) in
+                    uv := Assigned f;
+                    eval stack f
+                | [] -> (typ, None)))
+        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
         | Use _ -> failwith "unreachable"
-
-    and apply (callee, callee_co) arg : FcType.t * coercion option = match callee with
-        | FcType.Fn ((param, _), body) ->
-            ( substitute (Name.Map.singleton param arg) body
-            , match callee_co with
-              | Some callee_co -> Some (Inst (callee_co, arg))
-              | None -> None )
-        | Uv uv ->
-            (match !uv with
-            | Assigned _ -> failwith "unreachable" (* callee is in WHNF *)
-            | Unassigned _ -> failwith "todo")
-        | (App _ | Ov _) -> (* callee is in WHNF so just append arg: *)
-            ( FcType.App (callee, arg)
-            , match callee_co with
-              | Some callee_co -> Some (Inst (callee_co, arg))
-              | None -> None )
-        | Pi _ | Record _ | Type _ | Int | Bool | FcType.Use _ ->
-            failwith "unreachable" (* `typeof` on path expressions should prevent this *)
-    in eval typ
+    in eval [] typ
     
 (* # Lookup *)
 

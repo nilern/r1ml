@@ -21,7 +21,7 @@ and abs = binding list * t
 and t =
     | Pi of binding list * t * effect * abs
     | Record of field list
-    | Fn of binding * t
+    | Fn of Name.t * t
     | App of t * t
     | Type of abs
     | Use of binding
@@ -73,6 +73,11 @@ and to_doc = function
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc fields
+    | Fn (param, body) ->
+        PPrint.prefix 4 1
+            (PPrint.string "fun" ^^ PPrint.blank 1 ^^ Name.to_doc param
+                 ^^ PPrint.blank 1 ^^ PPrint.dot)
+            (to_doc body)
     | App (callee, arg) -> PPrint.group (callee_to_doc callee ^/^ arg_to_doc arg)
     | Type typ -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ abs_to_doc typ)
     | Use (name, _) -> Name.to_doc name
@@ -154,6 +159,11 @@ and substitute substitution = function
         Pi (params', substitute substitution domain, eff, substitute_abs substitution codomain)
     | Record fields ->
         Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
+    | Fn (param, body) ->
+        (* NOTE: Here we intentionally permit introduced reference capture but still implement
+                 shadowing by using Map.remove instead of Name.freshen + Map.add: *)
+        let substitution = Name.Map.remove param substitution in
+        Fn (param, substitute substitution body)
     | App (callee, arg) -> App (substitute substitution callee, substitute substitution arg)
     | Type typ -> Type (substitute_abs substitution typ)
     | (Use (name, _) | Ov ((name, _), _)) as typ ->
