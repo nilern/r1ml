@@ -516,7 +516,7 @@ and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = ma
     | (Pi _, Pi _) | (Type _, Type _) -> ((fun v -> v), typ)
     | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
-        | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ}])
+        | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ = field_typ}])
         | None -> raise (TypeError pos))
     | _ -> failwith "unreachable"
 
