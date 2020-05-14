@@ -116,11 +116,25 @@ let rec coercion_to_doc = function
     | Trans (co, co') ->
         PPrint.infix 4 1 (PPrint.bquotes (PPrint.string "o"))
             (coercion_to_doc co) (andco_to_doc co')
+    | Comp (ctor_co, arg_co) -> PPrint.prefix 4 1 (ctorco_to_doc ctor_co) (argco_to_doc arg_co)
+    | Inst (co, arg) -> PPrint.infix 4 1 PPrint.at (instantiee_to_doc co) (to_doc arg)
     | AUse name -> Name.to_doc name
     | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
 
 and andco_to_doc = function
     | Trans _ as co -> PPrint.parens (coercion_to_doc co)
+    | co -> coercion_to_doc co
+
+and ctorco_to_doc = function
+    | (Symm _ | Trans _ | Inst _) as co -> PPrint.parens (coercion_to_doc co)
+    | co -> coercion_to_doc co
+
+and argco_to_doc = function
+    | (Trans _ | Inst _ | Comp _) as co -> PPrint.parens (coercion_to_doc co)
+    | co -> coercion_to_doc co
+
+and instantiee_to_doc = function
+    | (Symm _ | Trans _) as co -> PPrint.parens (coercion_to_doc co)
     | co -> coercion_to_doc co
 
 let freshen (name, kind) = (Name.freshen name, kind)

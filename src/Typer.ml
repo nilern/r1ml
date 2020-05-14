@@ -151,7 +151,7 @@ module Env = struct
                 if name' = name
                 then ({env with scopes}, def)
                 else get scopes'
-            | Fn _ :: _ -> failwith "unreachable"
+            | Fn _ :: _ -> failwith "unreachable: Fn scope with non-BlackDecl in `Env.get`"
             | (Sig kvs | Struct kvs) :: scopes' ->
                 (match Name.Map.find_opt name kvs with
                 | Some def -> ({env with scopes}, def)
@@ -222,7 +222,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
                                   , {expr with v = App (coerce {expr with v = Use callee}, uvs, arg)} ) }
             ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
-        | _ -> failwith "unreachable")
+        | _ -> failwith "unreachable: callee focalization returned non-function")
     | Ast.If _ -> (* TODO: Unification? *)
         check env ([], Uv (Env.uv env (Name.fresh ()))) expr
     | Ast.Seal (expr, typ) ->
@@ -249,7 +249,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             { term = {expr with v = Letrec ( [(record.pos, selectee, record)]
                                            , {expr with v = Select (coerce {expr with v = Use selectee}, label)} )}
             ; typ; eff}
-        | _ -> failwith "unreachable")
+        | _ -> failwith "unreachable: selectee focalization returned non-record")
     | Ast.Proxy typ ->
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
@@ -303,7 +303,7 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
     | (_, {contents = WhiteDecl _ | GreyDecl _ | BlackDecl _ | WhiteDef _ | GreyDef _; _}) ->
-        failwith "unreachable"
+        failwith "unreachable: decl or non-black binding in `deftype`"
 
 (* # Types *)
 
@@ -370,46 +370,47 @@ and kindcheck env (typ : Ast.typ with_pos) =
     )
 
 and whnf pos env typ : FcType.t * coercion option =
-    let rec eval (stack : FcType.t list) : FcType.t -> FcType.t * coercion option = function
-        (* Purely interpreting version of Krivine's call-by-name machine,
-           with various extensions and coercion type evidence generation: *)
-        | App (callee, arg) -> eval (arg :: stack) callee
-        | Fn (param, body) ->
-            (match stack with
-            | arg :: stack' ->
-                let (typ, co) = eval stack' (substitute (Name.Map.singleton param arg) body) in
-                ( typ
-                , match co with
-                  | Some co -> Some (Inst (co, arg))
-                  | None -> None )
-            | [] -> failwith "unreachable")
+    let rec eval : FcType.t -> FcType.t * coercion option = function
+        | App (callee, arg) ->
+            let (callee, callee_co) = eval callee in
+            let (typ, co) = apply callee arg in
+            ( typ
+            , match (callee_co, co) with
+              | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, arg)))
+              | (Some callee_co, None) -> Some (Inst (callee_co, arg))
+              | (None, Some co) -> Some co
+              | (None, None) -> None )
+        | Fn _ as typ -> (typ, None)
         | Ov ov as typ ->
             (match Env.get_implementation env ov with
             | Some (axname, _, typ) ->
-                let (typ, co) = eval stack typ in
+                let (typ, co) = eval typ in
                 ( typ
                 , match co with
                   | Some co -> Some (Trans (AUse axname, co))
                   | None -> Some (AUse axname) )
-            | None ->
-                let step typ arg = FcType.App (typ, arg) in
-                (List.fold_left step typ stack, None))
+            | None -> (typ, None))
         | Uv uv as typ ->
             (match !uv with
-            | Assigned typ -> eval stack typ
-            | Unassigned _ ->
-                (match stack with
-                | _ :: _ ->
-                    let step arg body = match arg with
-                        | Ov ((name, _), _) -> FcType.Fn (name, body)
-                        | _ -> failwith "unreachable: unassigned uv with non-ov arg in `whnf`" in
-                    let f = List.fold_right step stack (Uv (sibling uv)) in
-                    uv := Assigned f;
-                    eval stack f
-                | [] -> (typ, None)))
+            | Assigned typ -> eval typ
+            | Unassigned _ -> (typ, None))
         | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
-        | Use _ -> failwith "unreachable"
-    in eval [] typ
+        | Use _ -> failwith "unreachable: `Use` in `whnf`"
+
+    and apply callee arg = match callee with
+        | Fn (param, body) -> eval (substitute (Name.Map.singleton param arg) body)
+        | Ov _ | App _ -> (FcType.App (callee, arg), None)
+        | Uv uv ->
+            (match !uv with
+            | Assigned callee -> apply callee arg
+            | Unassigned _ ->
+                let f = match arg with
+                    | Ov ((name, _), _) -> FcType.Fn (name, (Uv (sibling uv))) in
+                uv := Assigned f;
+                apply f arg)
+        | Pi _ | Record _ | Type _ | Int | Bool | Use _ ->
+            failwith "unreachable: uncallable type in `whnf`"
+    in eval typ
     
 (* # Lookup *)
 
@@ -429,7 +430,7 @@ and lookup pos env name =
                 let _ = unify pos env typ typ' in
                 lvalue
             | _ -> raise (TypeError pos))
-        | _ -> failwith "unreachable")
+        | _ -> failwith "unreachable: non-decl from decl `lookup`")
     | (env, ({contents = Env.GreyDecl _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackDecl lvalue;
@@ -452,7 +453,7 @@ and lookup pos env name =
                 binding := Env.BlackAnn (lvalue, expr, existentials, co);
                 lvalue
             | _ -> raise (TypeError pos))
-        | _ -> failwith "unreachable")
+        | _ -> failwith "unreachable: non-ann from ann `lookup`")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
         let {term = expr; typ; eff} = typeof env expr in
@@ -465,7 +466,7 @@ and lookup pos env name =
             let Cf coerce = subtype expr.pos true env typ typ' in
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             lvalue
-        | _ -> failwith "unreachable")
+        | _ -> failwith "unreachable: non-unn from unn `lookup`")
     | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackAnn (lvalue, expr, [], None);
@@ -477,7 +478,7 @@ and lookup pos env name =
 and articulate pos = function
     | Uv uv as uv_typ -> fun template ->
         (match uv with
-        | {contents = Assigned _} -> failwith "unreachable"
+        | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
         | {contents = Unassigned (_, level)} ->
             (match template with
             | Pi _ ->
@@ -503,8 +504,8 @@ and articulate pos = function
                         uv_typ
                     end)
             | Record _ -> raise (TypeError pos) (* no can do without row typing *)
-            | Use _ -> failwith "unreachable"))
-    | _ -> failwith "unreachable"
+            | Use _ -> failwith "unreachable: `Use` as template of `articulate`"))
+    | _ -> failwith "unreachable: `articulate` on non-uv"
 
 (* # Focalization *)
 
@@ -518,7 +519,6 @@ and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = ma
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
         | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ = field_typ}])
         | None -> raise (TypeError pos))
-    | _ -> failwith "unreachable"
 
 (* # Subtyping *)
 
@@ -694,7 +694,7 @@ and check_uv_assignee pos uv level = function
         check_uv_assignee pos uv level callee;
         check_uv_assignee pos uv level arg
     | Int | Bool -> ()
-    | Use _ -> failwith "unreachable"
+    | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`"
 
 (* # REPL support *)
 
