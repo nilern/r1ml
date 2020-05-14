@@ -11,7 +11,7 @@ type expr
     = Fn of FcType.binding list * lvalue * expr with_pos
     | App of expr with_pos * typ list * expr with_pos
     | Letrec of def list * expr with_pos
-    | Axiom of (Name.t * ov * typ) list * expr with_pos
+    | Axiom of (Name.t * FcType.binding list * typ * typ) list * expr with_pos
     | Cast of expr with_pos * coercion
     | Pack of typ list * expr with_pos
     | Unpack of FcType.binding list * lvalue * expr with_pos * expr with_pos
@@ -111,9 +111,17 @@ and arg_to_doc = function
     | (Fn _ | Cast _ | Letrec _ | Axiom _ | Unpack _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
     | arg -> expr_to_doc arg
 
-and axiom_to_doc (name, ((ov_name, _), _), typ) =
-    PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
-        (PPrint.infix 4 1 PPrint.tilde (Name.to_doc ov_name) (Type.to_doc typ))
+and axiom_to_doc (name, universals, l, r) = match universals with
+    | _ :: _ ->
+        PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
+            (PPrint.infix 4 1 PPrint.tilde
+                (Type.universal_to_doc universals l)
+                (Type.universal_to_doc universals r))
+    | [] ->
+        PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
+            (PPrint.infix 4 1 PPrint.tilde
+                (Type.to_doc l)
+                (Type.to_doc r))
 
 and castee_to_doc = function
     | Fn _ as callee -> PPrint.parens (expr_to_doc callee)

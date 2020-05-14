@@ -87,15 +87,27 @@ and to_doc = function
     | Bool -> PPrint.string "__bool"
 
 and domain_to_doc domain = match domain with
-    | Pi _ -> PPrint.parens (to_doc domain)
+    | (Pi _ | Fn _) -> PPrint.parens (to_doc domain)
+    | Uv uv ->
+        (match !uv with
+        | Assigned typ -> domain_to_doc typ
+        | Unassigned _ -> uv_to_doc uv)
     | _ -> to_doc domain
 
 and callee_to_doc callee = match callee with
-    | Pi _ -> PPrint.parens (to_doc callee)
+    | (Pi _ | Fn _) -> PPrint.parens (to_doc callee)
+    | Uv uv ->
+        (match !uv with
+        | Assigned typ -> callee_to_doc typ
+        | Unassigned _ -> uv_to_doc uv)
     | _ -> to_doc callee
 
 and arg_to_doc callee = match callee with
-    | (Pi _ | App _) -> PPrint.parens (to_doc callee)
+    | (Pi _ | Fn _ | App _) -> PPrint.parens (to_doc callee)
+    | Uv uv ->
+        (match !uv with
+        | Assigned typ -> arg_to_doc typ
+        | Unassigned _ -> uv_to_doc uv)
     | _ -> to_doc callee
 
 and field_to_doc {label; typ} =
@@ -105,6 +117,10 @@ and binding_to_doc (name, kind) =
     PPrint.parens (Name.to_doc name ^/^ PPrint.colon ^/^ kind_to_doc kind)
 
 and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_doc bindings
+
+and universal_to_doc universals body =
+    PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
+        (PPrint.dot ^^ PPrint.blank 1 ^^ to_doc body)
 
 and uv_to_doc uv = match !uv with
     | Unassigned (name, _) -> PPrint.qmark ^^ Name.to_doc name

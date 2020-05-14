@@ -529,11 +529,24 @@ and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Impure, Ast.Impure) -> ()
 
 and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov list * FcType.t) =
-    let axioms = List.map (fun (((name, _), _) as param) ->
+    let axiom_bindings = List.map (fun (((name, _), _) as param) ->
         (Name.fresh (), param, Uv (Env.uv env name))
     ) existentials in
-    let env = Env.push_axioms env axioms in
+    let env = Env.push_axioms env axiom_bindings in
     let Cf coerce = subtype pos occ env typ super in
+
+    let axioms = List.map (fun (axname, (((_, kind) as binding, _) as param), impl) ->
+        let rec axiomatize l r = function
+            | ArrowK (domain, codomain) ->
+                let def = (Name.fresh (), domain) in
+                let l = FcType.App (l, Use def) in
+                let r = FcType.App (r, Use def) in
+                let (universals, l, r) = axiomatize l r codomain in
+                (def :: universals, l, r)
+            | TypeK -> ([], l, r) in
+        let (universals, l, r) = axiomatize (Use binding) impl kind in
+        (axname, universals, l, r)
+    ) axiom_bindings in
     match axioms with
     | _ :: _ -> fun v -> {pos; v = Axiom (axioms, coerce v)}
     | [] -> coerce

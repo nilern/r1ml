@@ -49,6 +49,7 @@ and coercion =
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
+val universal_to_doc : binding list -> t -> PPrint.document
 val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 

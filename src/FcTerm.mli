@@ -11,7 +11,7 @@ type expr
     = Fn of FcType.binding list * lvalue * expr with_pos
     | App of expr with_pos * typ list * expr with_pos
     | Letrec of def list * expr with_pos
-    | Axiom of (Name.t * ov * typ) list * expr with_pos
+    | Axiom of (Name.t * FcType.binding list * typ * typ) list * expr with_pos
     | Cast of expr with_pos * coercion
     | Pack of typ list * expr with_pos
     | Unpack of FcType.binding list * lvalue * expr with_pos * expr with_pos
