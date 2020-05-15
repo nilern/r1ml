@@ -1,3 +1,6 @@
+type partial = |
+type complete = |
+
 type kind
     = ArrowK of kind * kind
     | TypeK
@@ -12,34 +15,38 @@ type ov = binding * level
 
 type uvv =
     | Unassigned of Name.t * level
-    | Assigned of t
+    | Assigned of complete t
 
 and uv = uvv ref
 
-and abs = binding list * t
+and 'a abs = binding list * 'a t
 
-and t =
-    | Pi of binding list * t * effect * abs
-    | Record of field list
-    | Fn of Name.t * t
-    | App of t * t
-    | Type of abs
-    | Use of binding
-    | Ov of ov
-    | Uv of uv
-    | Int
-    | Bool
+and _ t =
+    | Pi : binding list * 'a t * effect * 'a abs -> 'a t
+    | Record : 'a field list -> 'a t
+    | Fn : Name.t * 'a t -> 'a t
+    | App : 'a t * 'a t -> 'a t
+    | Type : 'a abs -> 'a t
+    | Use : binding -> 'a t
+    | Ov : ov -> 'a t
+    | Uv : uv -> 'a t
+    | Int : 'a t
+    | Bool : 'a t
+    | Hole : partial t
 
-and field = {label : string; typ : t}
+and 'a field = {label : string; typ : 'a t}
 
 and coercion =
-    | Refl of t
+    | Refl of typ
     | Symm of coercion
     | Trans of coercion * coercion
     | Comp of coercion * coercion
-    | Inst of coercion * t
+    | Inst of coercion * typ
     | AUse of Name.t
     | TypeCo of coercion
+
+and typ = complete t
+and template = partial t
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
@@ -54,13 +61,13 @@ and domain_kind_to_doc domain = match domain with
     | ArrowK _ -> PPrint.parens (kind_to_doc domain)
     | _ -> kind_to_doc domain
 
-let rec abs_to_doc = function
+let rec abs_to_doc : type a . a abs -> PPrint.document = function
     | ([], body) -> to_doc body
     | (params, body) ->
         PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc params))
             (PPrint.dot ^^ PPrint.blank 1 ^^ to_doc body)
 
-and to_doc = function
+and to_doc : type a . a t -> PPrint.document = function
     | Pi ([], domain, eff, codomain) ->
         PPrint.prefix 4 1 (domain_to_doc domain) 
             (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
@@ -85,32 +92,33 @@ and to_doc = function
     | Uv uv -> uv_to_doc uv
     | Int -> PPrint.string "__int"
     | Bool -> PPrint.string "__bool"
+    | Hole -> PPrint.string "_"
 
-and domain_to_doc domain = match domain with
-    | (Pi _ | Fn _) -> PPrint.parens (to_doc domain)
+and domain_to_doc : type a . a t -> PPrint.document = function
+    | (Pi _ | Fn _) as domain -> PPrint.parens (to_doc domain)
     | Uv uv ->
         (match !uv with
         | Assigned typ -> domain_to_doc typ
         | Unassigned _ -> uv_to_doc uv)
-    | _ -> to_doc domain
+    | domain -> to_doc domain
 
-and callee_to_doc callee = match callee with
-    | (Pi _ | Fn _) -> PPrint.parens (to_doc callee)
+and callee_to_doc : type a . a t -> PPrint.document = function
+    | (Pi _ | Fn _) as callee -> PPrint.parens (to_doc callee)
     | Uv uv ->
         (match !uv with
         | Assigned typ -> callee_to_doc typ
         | Unassigned _ -> uv_to_doc uv)
-    | _ -> to_doc callee
+    | callee -> to_doc callee
 
-and arg_to_doc callee = match callee with
-    | (Pi _ | Fn _ | App _) -> PPrint.parens (to_doc callee)
+and arg_to_doc  : type a . a t -> PPrint.document = function
+    | (Pi _ | Fn _ | App _) as arg -> PPrint.parens (to_doc arg)
     | Uv uv ->
         (match !uv with
         | Assigned typ -> arg_to_doc typ
         | Unassigned _ -> uv_to_doc uv)
-    | _ -> to_doc callee
+    | arg -> to_doc arg
 
-and field_to_doc {label; typ} =
+and field_to_doc : type a . a field -> PPrint.document = fun {label; typ} ->
     PPrint.string label ^/^ PPrint.colon ^/^ to_doc typ
 
 and binding_to_doc (name, kind) =

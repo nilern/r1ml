@@ -4,7 +4,7 @@ open FcType
 open FcTerm
 type 'a with_pos = 'a Ast.with_pos
 
-type 'a typing = {term : 'a; typ : FcType.t; eff : Ast.effect}
+type 'a typing = {term : 'a; typ : FcType.typ; eff : Ast.effect}
 
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
 (* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
@@ -30,7 +30,7 @@ module Env = struct
         = Repl of (Name.t, val_binder ref) Hashtbl.t
         | Existential of binding list ref * level
         | Universal of ov list
-        | Axiom of (Name.t * ov * FcType.t) Name.Map.t
+        | Axiom of (Name.t * ov * FcType.typ) Name.Map.t
         | Fn of val_binder ref
         | Sig of val_binder ref Name.Map.t
         | Struct of val_binder ref Name.Map.t
@@ -211,7 +211,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
-        (match focalize callee_expr.pos env callee_typ (Pi ([], Int, Impure, ([], Int))) with
+        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Impure, ([], Hole))) with
         | (coerce, Pi (universals, domain, app_eff, codomain)) ->
             let (uvs, domain, app_eff, codomain) =
                 instantiate_arrow env (universals, domain, app_eff, codomain) in
@@ -242,7 +242,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.Select (record, label) ->
         let {term = record; typ = record_typ; eff} = typeof env record in
         let label = Name.to_string label in
-        let shape = FcType.Record [{label; typ = Int}] in
+        let shape = FcType.Record [{label; typ = Hole}] in
         (match focalize record.pos env record_typ shape with
         | (coerce, Record [{label = _; typ}]) ->
             let selectee = {name = Name.fresh (); typ = record_typ} in
@@ -273,10 +273,10 @@ and field_types env fields =
     ) ([], [], [], Pure) fields in
     (List.rev defs, List.rev fields, List.rev typs, eff)
 
-and check env (typ : FcType.abs) (expr : Ast.expr with_pos) =
+and check env (typ : FcTerm.abs) (expr : Ast.expr with_pos) =
     implement env (reabstract env typ) expr
 
-and implement env ((params, body) as typ : ov list * FcType.t) (expr : Ast.expr with_pos) =
+and implement env ((params, body) as typ : ov list * FcType.typ) (expr : Ast.expr with_pos) =
     match expr.v with
     | Ast.If (cond, conseq, alt) ->
         let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
@@ -348,7 +348,10 @@ and kindcheck env (typ : Ast.typ with_pos) =
             Record (List.map (elaborate_decl env) decls)
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
-            | {term = _; typ = Type typ; eff = Pure} -> snd (reabstract env typ)
+            | {term = _; typ = proxy_typ; eff = Pure} ->
+                (match focalize typ.pos env proxy_typ (Type ([], Hole)) with
+                | (_, Type typ) -> snd (reabstract env typ)
+                | _ -> raise (TypeError typ.pos))
             | _ -> raise (TypeError typ.pos))
         | Ast.Singleton expr ->
             (match typeof env expr with
@@ -369,8 +372,8 @@ and kindcheck env (typ : Ast.typ with_pos) =
         (!params, typ)
     )
 
-and whnf pos env typ : FcType.t * coercion option =
-    let rec eval : FcType.t -> FcType.t * coercion option = function
+and whnf pos env typ : FcType.typ * coercion option =
+    let rec eval : FcType.typ -> FcType.typ * coercion option = function
         | App (callee, arg) ->
             let (callee, callee_co) = eval callee in
             let (typ, co) = apply callee arg in
@@ -397,7 +400,8 @@ and whnf pos env typ : FcType.t * coercion option =
         | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
-    and apply callee arg = match callee with
+    and apply : FcType.typ -> FcType.typ -> FcType.typ * coercion option = fun callee arg ->
+        match callee with
         | Fn (param, body) -> eval (substitute (Name.Map.singleton param arg) body)
         | Ov _ | App _ -> (FcType.App (callee, arg), None)
         | Uv uv ->
@@ -475,7 +479,7 @@ and lookup pos env name =
 
 (* # Articulation *)
 
-and articulate pos = function
+and articulate : type a . span -> typ -> a FcType.t -> typ = fun pos -> function
     | Uv uv as uv_typ -> fun template ->
         (match uv with
         | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
@@ -489,19 +493,24 @@ and articulate pos = function
                 let typ = Type ([], Uv (sibling uv)) in
                 uv := Assigned typ;
                 typ
-            | Int | Bool | Ov _ ->
-                uv := Assigned template;
-                template
+            | Int -> uv := Assigned Int; Int
+            | Bool -> uv := Assigned Bool; Bool
+            | Ov ov ->
+                let typ = Ov ov in
+                uv := Assigned typ;
+                typ
             | Uv uv' ->
                 (match !uv' with
                 | Assigned template -> articulate pos uv_typ template
                 | Unassigned (_, level') ->
                     if level' <= level then begin
-                        uv := Assigned template;
-                        template
+                        let typ = Uv uv' in
+                        uv := Assigned typ;
+                        typ
                     end else begin
-                        uv' := Assigned uv_typ;
-                        uv_typ
+                        let typ = Uv uv in
+                        uv' := Assigned typ;
+                        typ
                     end)
             | Record _ -> raise (TypeError pos) (* no can do without row typing *)
             | Use _ -> failwith "unreachable: `Use` as template of `articulate`"))
@@ -509,7 +518,7 @@ and articulate pos = function
 
 (* # Focalization *)
 
-and focalize pos env typ template : (expr with_pos -> expr with_pos) * typ  = match (typ, template) with
+and focalize pos env typ (template : FcType.template) = match (typ, template) with
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> focalize pos env typ template
@@ -528,7 +537,7 @@ and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
     | (Ast.Impure, Ast.Impure) -> ()
 
-and coercion pos (occ : bool) env (typ : FcType.t) ((existentials, super) : ov list * FcType.t) =
+and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super) : ov list * FcType.typ) =
     let axiom_bindings = List.map (fun (((name, _), _) as param) ->
         (Name.fresh (), param, Uv (Env.uv env name))
     ) existentials in
@@ -568,7 +577,7 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
                 | [] -> {pos; v = Letrec ([(pos, impl, v)], body)})
     )
 
-and subtype pos (occ : bool) env (typ : FcType.t) (super : FcType.t) : coercer =
+and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coercer =
     let rec subtype_whnf typ super = match (typ, super) with
         | (Uv uv, _) ->
             (match !uv with
@@ -642,7 +651,7 @@ and unify pos env typ typ' : coercion option=
     | (None, None, Some co'') -> Some (Symm co'')
     | (None, None, None) -> None
 
-and unify_whnf pos env typ typ' : coercion option = match (typ, typ') with
+and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option = match (typ, typ') with
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> unify_whnf pos env typ typ'
@@ -676,12 +685,12 @@ and unify_whnf pos env typ typ' : coercion option = match (typ, typ') with
     | (Int, Int) | (Bool, Bool) -> None
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
-and check_uv_assignee_abs pos uv level = function
+and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
     | ([], typ) -> check_uv_assignee pos uv level typ
     | (_ :: _, _) -> raise (TypeError pos) (* not a monotype *)
 
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
-and check_uv_assignee pos uv level = function
+and check_uv_assignee pos uv level : typ -> unit = function
     | Uv uv' ->
         if uv = uv'
         then raise (TypeError pos) (* occurs *)

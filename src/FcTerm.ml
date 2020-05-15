@@ -1,7 +1,7 @@
 type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
-type abs = FcType.abs
-type typ = FcType.t
+type abs = FcType.complete FcType.abs
+type typ = FcType.typ
 type ov = FcType.ov
 type coercion = FcType.coercion
 
