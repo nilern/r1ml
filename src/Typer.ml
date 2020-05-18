@@ -20,7 +20,7 @@ module Env = struct
     type val_binder =
         | WhiteDecl of Ast.decl
         | GreyDecl of Ast.decl
-        | BlackDecl of lvalue
+        | BlackDecl of lvalue * locator
         | WhiteDef of Ast.lvalue * Ast.expr with_pos
         | GreyDef of Ast.lvalue * Ast.expr with_pos
         | BlackAnn of lvalue * Ast.expr with_pos * ov list * locator * coercion option
@@ -46,7 +46,7 @@ module Env = struct
     let repl_define env ({name; _} as binding) =
         let rec define scopes =
             match scopes with
-            | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (BlackDecl binding))
+            | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (BlackDecl (binding, Hole)))
             | _ :: scopes' -> define scopes'
             | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
         in define env.scopes
@@ -120,8 +120,8 @@ module Env = struct
     let uv {current_level = {contents = level}; _} binding =
         ref (Unassigned (binding, level))
 
-    let push_domain env binding =
-        {env with scopes = Fn (ref (BlackDecl binding)) :: env.scopes}
+    let push_domain env binding locator =
+        {env with scopes = Fn (ref (BlackDecl (binding, locator))) :: env.scopes}
 
     let push_sig env bindings =
         let bindings = List.fold_left (fun bindings ({Ast.name; _} as binding) ->
@@ -147,7 +147,7 @@ module Env = struct
                 (match Hashtbl.find_opt kvs name with
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes')
-            | Fn ({contents = BlackDecl {name = name'; _}} as def) :: scopes' ->
+            | Fn ({contents = BlackDecl ({name = name'; _}, _)} as def) :: scopes' ->
                 if name' = name
                 then ({env with scopes}, def)
                 else get scopes'
@@ -201,7 +201,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             | None -> failwith "todo" in
         let (universals, domain_locator, domain) = kindcheck env ann in
         Env.skolemizing_domain env (universals, domain_locator, domain) (fun env (domain_locator, domain) ->
-            let env = Env.push_domain env {name; typ = domain} in
+            let env = Env.push_domain env {name; typ = domain} domain_locator in
             Env.with_existential env (fun env existentials ->
                 let {term = body; typ = codomain; eff} = typeof env body in
                 { term = {expr with v = Fn (universals, {name; typ = domain}, body)} (* FIXME: bind existentials *)
@@ -255,7 +255,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
     | Ast.Use name ->
-        let {name = _; typ} as def = lookup expr.pos env name in
+        let (_, ({name = _; typ} as def)) = lookup expr.pos env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
     | Ast.Const c ->
         let typ = match c with
@@ -324,7 +324,7 @@ and kindcheck env (typ : Ast.typ with_pos) =
                 let name = match name with
                     | Some name -> name
                     | None -> Name.fresh () in
-                let env = Env.push_domain env {name; typ = domain} in
+                let env = Env.push_domain env {name; typ = domain} domain_locator in
                 let (existentials, codomain_locator, codomain_impl) as codomain = kindcheck env codomain in
                 match eff with
                 | Pure ->
@@ -342,38 +342,42 @@ and kindcheck env (typ : Ast.typ with_pos) =
                     let codomain = ( existentials', substitute substitution codomain_locator
                                    , substitute substitution codomain_impl ) in
                     let (_, codomain_locator, codomain) = reabstract env codomain in
-                    Pi (universals, domain_locator, domain, eff, ([], codomain_locator, codomain))
-                | Impure -> Pi (universals, domain_locator, domain, eff, codomain)
+                    ( Pi (universals, Hole, Hole, eff, ([], Hole, codomain_locator))
+                    , Pi (universals, domain_locator, domain, eff, ([], Hole, codomain)) )
+                | Impure -> ( Pi (universals, Hole, Hole, eff, ([], Hole, Hole))
+                            , Pi (universals, domain_locator, domain, eff, codomain) )
             )
         | Ast.Sig decls ->
             let env = Env.push_sig env decls in
-            Record (List.map (elaborate_decl env) decls)
+            let (locators, decls) = List.split (List.map (elaborate_decl env) decls) in
+            (Record locators, Record decls)
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
                 (match focalize typ.pos env proxy_typ (Type ([], Hole, Hole)) with
                 | (_, Type typ) ->
-                    let (_, _, typ) = reabstract env typ in
-                    typ
+                    let (_, locator, typ) = reabstract env typ in
+                    (locator, typ)
                 | _ -> raise (TypeError typ.pos))
             | _ -> raise (TypeError typ.pos))
         | Ast.Singleton expr ->
             (match typeof env expr with
-            | {term = _; typ; eff = Pure} -> typ
+            | {term = _; typ; eff = Pure} -> (Hole, typ)
             | _ -> raise (TypeError typ.pos))
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
-            Type ([], Hole, Ov ov)
-        | Ast.Int -> Int
-        | Ast.Bool -> Bool
+            (Type ([], Hole, Ov ov), Type ([], Hole, Ov ov))
+        | Ast.Int -> (Hole, Int)
+        | Ast.Bool -> (Hole, Bool)
 
     and elaborate_decl env {name; typ} =
-        let {name; typ} = lookup typ.pos env name in
-        {label = Name.to_string name; typ}
+        let (locator, {name; typ}) = lookup typ.pos env name in
+        let label = Name.to_string name in
+        ({label; typ = locator}, {label; typ})
     in
     Env.with_existential env (fun env params ->
-        let typ = elaborate env typ in
-        (!params, Hole, typ) (* FIXME: Hole *)
+        let (locator, typ) = elaborate env typ in
+        (!params, locator, typ)
     )
 
 and whnf pos env typ : FcType.typ * coercion option =
@@ -429,22 +433,22 @@ and lookup pos env name =
         let typ = kindcheck env typ in
         (match !binding with
         | Env.GreyDecl _ ->
-            let (_, _, typ) = reabstract env typ in
+            let (_, locator, typ) = reabstract env typ in
             let lvalue = {name; typ} in
-            binding := Env.BlackDecl lvalue;
-            lvalue
-        | Env.BlackDecl ({name = _; typ = typ'} as lvalue) ->
+            binding := Env.BlackDecl (lvalue, locator);
+            (locator, lvalue)
+        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, locator) ->
             (match typ with
             | ([], Hole, typ) ->
                 let _ = unify pos env typ typ' in
-                lvalue
+                (Hole, lvalue)
             | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable: non-decl from decl `lookup`")
     | (env, ({contents = Env.GreyDecl _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
-        binding := Env.BlackDecl lvalue;
-        lvalue
-    | (_, {contents = Env.BlackDecl def}) -> def
+        binding := Env.BlackDecl (lvalue, Hole);
+        (Hole, lvalue)
+    | (_, {contents = Env.BlackDecl (lvalue, locator)}) -> (locator, lvalue)
 
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = Some typ} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
@@ -454,13 +458,13 @@ and lookup pos env name =
             let (existentials, locator, typ) = reabstract env typ in
             let lvalue = {name; typ} in
             binding := Env.BlackAnn (lvalue, expr, existentials, locator, None);
-            lvalue
+            (locator, lvalue)
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, locator, None) ->
             (match typ with
             | ([], Hole, typ) ->
                 let co = unify pos env typ typ' in
                 binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
-                lvalue
+                (Hole, lvalue)
             | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable: non-ann from ann `lookup`")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
@@ -470,17 +474,18 @@ and lookup pos env name =
         | Env.GreyDef _ ->
             let lvalue = {name; typ} in
             binding := Env.BlackUnn (lvalue, expr, eff);
-            lvalue
+            (Hole, lvalue)
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
             let Cf coerce = subtype expr.pos true env typ typ' in
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
-            lvalue
+            (Hole, lvalue)
         | _ -> failwith "unreachable: non-unn from unn `lookup`")
     | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
         binding := Env.BlackAnn (lvalue, expr, [], Hole, None);
-        lvalue
-    | (_, {contents = Env.BlackAnn (lvalue, _, _, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
+        (Hole, lvalue)
+    | (_, {contents = Env.BlackAnn (lvalue, _, _, locator, _)}) -> (locator, lvalue)
+    | (_, {contents = Env.BlackUnn (lvalue, _, _)}) -> (Hole, lvalue)
 
 (* # Articulation *)
 
