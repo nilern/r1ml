@@ -23,7 +23,7 @@ module Env = struct
         | BlackDecl of lvalue
         | WhiteDef of Ast.lvalue * Ast.expr with_pos
         | GreyDef of Ast.lvalue * Ast.expr with_pos
-        | BlackAnn of lvalue * Ast.expr with_pos * ov list * coercion option
+        | BlackAnn of lvalue * Ast.expr with_pos * ov list * locator * coercion option
         | BlackUnn of lvalue * expr with_pos * effect
 
     type scope
@@ -82,7 +82,7 @@ module Env = struct
               (substitute substitution body)
         )
 
-    let skolemizing_domain ({scopes; current_level} as env) (existentials, domain) f =
+    let skolemizing_domain ({scopes; current_level} as env) (existentials, locator, domain) f =
         with_incremented_level env (fun () ->
             let level = !current_level in
             let skolems = List.map (fun binding -> (binding, level)) existentials in
@@ -90,10 +90,10 @@ module Env = struct
                 Name.Map.add name (Ov skolem) substitution
             ) Name.Map.empty skolems in
             f {env with scopes = Universal skolems :: scopes}
-              (substitute substitution domain)
+              (substitute substitution locator, substitute substitution domain)
         )
 
-    let skolemizing_abs ({scopes; current_level} as env) (existentials, body) f =
+    let skolemizing_abs ({scopes; current_level} as env) (existentials, locator, body) f =
         with_incremented_level env (fun () ->
             let level = !current_level in
             let existentials' = List.map FcType.freshen existentials in
@@ -102,7 +102,7 @@ module Env = struct
                 Name.Map.add name (Ov skolem) substitution
             ) Name.Map.empty skolems in
             f {env with scopes = Existential (ref existentials', level) :: scopes}
-              (existentials', substitute substitution body)
+              (existentials', substitute substitution locator, substitute substitution body)
         )
 
     let skolemizing_arrow ({scopes; current_level} as env) (universals, domain, eff, codomain) f =
@@ -171,19 +171,20 @@ module Env = struct
         in get env.scopes
 end
 
-let instantiate_abs env (existentials, body) =
+let instantiate_abs env (existentials, locator, body) =
     let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) existentials in
     let substitution = List.fold_left2 (fun substitution (name, _) uv ->
             Name.Map.add name uv substitution
     ) Name.Map.empty existentials uvs in
-    (uvs, substitute substitution body)
+    (uvs, substitute substitution locator, substitute substitution body)
 
-let instantiate_arrow env (universals, domain, eff, codomain) =
-    let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
+let instantiate_arrow env (universals, (domain_locator : template), domain, eff, codomain) =
+    let uvs : typ list = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
     let substitution = List.fold_left2 (fun substitution (name, _) uv ->
             Name.Map.add name uv substitution
     ) Name.Map.empty universals uvs in
-    (uvs, substitute substitution domain, eff, substitute_abs substitution codomain)
+    ( uvs, substitute substitution domain_locator, substitute substitution domain
+    , eff, substitute_abs substitution codomain )
 
 (* # Effects *)
 
@@ -198,35 +199,35 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let ann = match ann with
             | Some ann -> ann
             | None -> failwith "todo" in
-        let (universals, _) as domain = kindcheck env ann in
-        Env.skolemizing_domain env domain (fun env domain ->
+        let (universals, domain_locator, domain) = kindcheck env ann in
+        Env.skolemizing_domain env (universals, domain_locator, domain) (fun env (domain_locator, domain) ->
             let env = Env.push_domain env {name; typ = domain} in
             Env.with_existential env (fun env existentials ->
                 let {term = body; typ = codomain; eff} = typeof env body in
                 { term = {expr with v = Fn (universals, {name; typ = domain}, body)} (* FIXME: bind existentials *)
-                ; typ = Pi (universals, domain, eff, (!existentials, codomain))
+                ; typ = Pi (universals, domain_locator, domain, eff, (!existentials, Hole, codomain)) (* HACK: Hole *)
                 ; eff = Pure }
             )
         )
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
-        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Impure, ([], Hole))) with
-        | (coerce, Pi (universals, domain, app_eff, codomain)) ->
-            let (uvs, domain, app_eff, codomain) =
-                instantiate_arrow env (universals, domain, app_eff, codomain) in
+        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Hole, Impure, ([], Hole, Hole))) with
+        | (coerce, Pi (universals, locator, domain, app_eff, ((_, _, concr_cod) as codomain))) ->
+            let (uvs, domain_locator, domain, app_eff, codomain) =
+                instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
 
-            let {term = arg; typ = _; eff = arg_eff} = check env ([], domain) arg in
+            let {term = arg; typ = _; eff = arg_eff} = check env ([], Hole, domain) arg in
             { term = { pos = callee_expr.pos
                      ; v = Letrec ( [(callee_expr.pos, callee, callee_expr)]
                                   , {expr with v = App (coerce {expr with v = Use callee}, uvs, arg)} ) }
-            ; typ = snd codomain (* FIXME: Hoist, unpack, axioms, coerce *)
+            ; typ = concr_cod (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable: callee focalization returned non-function")
     | Ast.If _ -> (* TODO: Unification? *)
-        check env ([], Uv (Env.uv env (Name.fresh ()))) expr
+        check env ([], Hole, Uv (Env.uv env (Name.fresh ()))) expr
     | Ast.Seal (expr, typ) ->
-        let (existentials, _) as typ = kindcheck env typ in
+        let (existentials, _, _) as typ = kindcheck env typ in
         let res = check env typ expr in
         let gen_eff = match existentials with
             | _ :: _ -> Ast.Impure
@@ -276,10 +277,10 @@ and field_types env fields =
 and check env (typ : FcTerm.abs) (expr : Ast.expr with_pos) =
     implement env (reabstract env typ) expr
 
-and implement env ((params, body) as typ : ov list * FcType.typ) (expr : Ast.expr with_pos) =
+and implement env ((params, locator, body) as typ) (expr : Ast.expr with_pos) =
     match expr.v with
     | Ast.If (cond, conseq, alt) ->
-        let {term = cond; eff = cond_eff} = check env ([], Bool) cond in
+        let {term = cond; eff = cond_eff} = check env ([], Hole, Bool) cond in
         let {term = conseq; eff = conseq_eff} = implement env typ conseq in
         let {term = alt; eff = alt_eff} = implement env typ alt in
         { term = {expr with v = If (cond, conseq, alt)}
@@ -297,8 +298,8 @@ and implement env ((params, body) as typ : ov list * FcType.typ) (expr : Ast.exp
 and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup pos env name in
     match Env.get pos env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, coercion)}) -> (* FIXME: use coercion *)
-        let {term = expr; typ; eff} = implement env (existentials, typ) expr in
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) -> (* FIXME: use coercion *)
+        let {term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
     | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
@@ -307,24 +308,24 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
 
 (* # Types *)
 
-and reabstract env (params, body) =
+and reabstract env (params, locator, body) =
     let params' = List.map (fun param -> Env.generate env (freshen param)) params in
     let substitution = List.fold_left2 (fun substitution (name, _) param' ->
         Name.Map.add name (Ov param') substitution
     ) Name.Map.empty params params' in
-    (params', substitute substitution body)
+    (params', substitute substitution locator, substitute substitution body)
 
 and kindcheck env (typ : Ast.typ with_pos) =
     let rec elaborate env (typ : Ast.typ with_pos) =
         match typ.v with
         | Ast.Pi ({name; typ = domain}, eff, codomain) ->
-            let (universals, _) as domain = kindcheck env domain in
-            Env.skolemizing_domain env domain (fun env domain ->
+            let (universals, _, _) as domain = kindcheck env domain in
+            Env.skolemizing_domain env domain (fun env (domain_locator, domain) ->
                 let name = match name with
                     | Some name -> name
                     | None -> Name.fresh () in
                 let env = Env.push_domain env {name; typ = domain} in
-                let (existentials, _) as codomain = kindcheck env codomain in
+                let (existentials, codomain_locator, codomain_impl) as codomain = kindcheck env codomain in
                 match eff with
                 | Pure ->
                     let existentials' = existentials |> List.map (fun (name, kind) ->
@@ -338,10 +339,11 @@ and kindcheck env (typ : Ast.typ with_pos) =
                         ) (FcType.Use existential) universals in
                         Name.Map.add name path substitution
                     ) Name.Map.empty existentials existentials' in
-                    let codomain = (existentials', substitute substitution (snd codomain)) in
-                    let (_, codomain) = reabstract env codomain in
-                    Pi (universals, domain, eff, ([], codomain))
-                | Impure -> Pi (universals, domain, eff, codomain)
+                    let codomain = ( existentials', substitute substitution codomain_locator
+                                   , substitute substitution codomain_impl ) in
+                    let (_, codomain_locator, codomain) = reabstract env codomain in
+                    Pi (universals, domain_locator, domain, eff, ([], codomain_locator, codomain))
+                | Impure -> Pi (universals, domain_locator, domain, eff, codomain)
             )
         | Ast.Sig decls ->
             let env = Env.push_sig env decls in
@@ -349,8 +351,10 @@ and kindcheck env (typ : Ast.typ with_pos) =
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
-                (match focalize typ.pos env proxy_typ (Type ([], Hole)) with
-                | (_, Type typ) -> snd (reabstract env typ)
+                (match focalize typ.pos env proxy_typ (Type ([], Hole, Hole)) with
+                | (_, Type typ) ->
+                    let (_, _, typ) = reabstract env typ in
+                    typ
                 | _ -> raise (TypeError typ.pos))
             | _ -> raise (TypeError typ.pos))
         | Ast.Singleton expr ->
@@ -359,7 +363,7 @@ and kindcheck env (typ : Ast.typ with_pos) =
             | _ -> raise (TypeError typ.pos))
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
-            Type ([], Ov ov)
+            Type ([], Hole, Ov ov)
         | Ast.Int -> Int
         | Ast.Bool -> Bool
 
@@ -369,7 +373,7 @@ and kindcheck env (typ : Ast.typ with_pos) =
     in
     Env.with_existential env (fun env params ->
         let typ = elaborate env typ in
-        (!params, typ)
+        (!params, Hole, typ) (* FIXME: Hole *)
     )
 
 and whnf pos env typ : FcType.typ * coercion option =
@@ -424,13 +428,14 @@ and lookup pos env name =
         binding := Env.GreyDecl decl;
         let typ = kindcheck env typ in
         (match !binding with
-        | Env.GreyDecl _ -> 
-            let lvalue = {name; typ = snd (reabstract env typ)} in
+        | Env.GreyDecl _ ->
+            let (_, _, typ) = reabstract env typ in
+            let lvalue = {name; typ} in
             binding := Env.BlackDecl lvalue;
             lvalue
         | Env.BlackDecl ({name = _; typ = typ'} as lvalue) ->
             (match typ with
-            | ([], typ) ->
+            | ([], Hole, typ) ->
                 let _ = unify pos env typ typ' in
                 lvalue
             | _ -> raise (TypeError pos))
@@ -446,15 +451,15 @@ and lookup pos env name =
         let typ = kindcheck env typ in
         (match !binding with
         | Env.GreyDef _ ->
-            let (existentials, typ) = reabstract env typ in
+            let (existentials, locator, typ) = reabstract env typ in
             let lvalue = {name; typ} in
-            binding := Env.BlackAnn (lvalue, expr, existentials, None);
+            binding := Env.BlackAnn (lvalue, expr, existentials, locator, None);
             lvalue
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, None) ->
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, locator, None) ->
             (match typ with
-            | ([], typ) ->
+            | ([], Hole, typ) ->
                 let co = unify pos env typ typ' in
-                binding := Env.BlackAnn (lvalue, expr, existentials, co);
+                binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
                 lvalue
             | _ -> raise (TypeError pos))
         | _ -> failwith "unreachable: non-ann from ann `lookup`")
@@ -466,31 +471,31 @@ and lookup pos env name =
             let lvalue = {name; typ} in
             binding := Env.BlackUnn (lvalue, expr, eff);
             lvalue
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _) ->
+        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
             let Cf coerce = subtype expr.pos true env typ typ' in
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             lvalue
         | _ -> failwith "unreachable: non-unn from unn `lookup`")
     | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
-        binding := Env.BlackAnn (lvalue, expr, [], None);
+        binding := Env.BlackAnn (lvalue, expr, [], Hole, None);
         lvalue
-    | (_, {contents = Env.BlackAnn (lvalue, _, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
+    | (_, {contents = Env.BlackAnn (lvalue, _, _, _, _) | Env.BlackUnn (lvalue, _, _)}) -> lvalue
 
 (* # Articulation *)
 
-and articulate : type a . span -> typ -> a FcType.t -> typ = fun pos -> function
+and articulate pos = function
     | Uv uv as uv_typ -> fun template ->
         (match uv with
         | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
         | {contents = Unassigned (_, level)} ->
             (match template with
             | Pi _ ->
-                let typ = Pi ([], Uv (sibling uv), Impure, ([], Uv (sibling uv))) in
+                let typ = Pi ([], Hole, Uv (sibling uv), Impure, ([], Hole, Uv (sibling uv))) in
                 uv := Assigned typ;
                 typ
             | Type _ ->
-                let typ = Type ([], Uv (sibling uv)) in
+                let typ = Type ([], Hole, Uv (sibling uv)) in
                 uv := Assigned typ;
                 typ
             | Int -> uv := Assigned Int; Int
@@ -537,7 +542,7 @@ and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
     | (Ast.Impure, Ast.Impure) -> ()
 
-and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super) : ov list * FcType.typ) =
+and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, locator, super) : ov list * typ * typ) =
     let axiom_bindings = List.map (fun (((name, _), _) as param) ->
         (Name.fresh (), param, Uv (Env.uv env name))
     ) existentials in
@@ -561,8 +566,8 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super) : ov
     | [] -> coerce
 
 and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
-    Env.skolemizing_abs env typ (fun env (existentials, typ) ->
-        let (uvs, super) = instantiate_abs env super in
+    Env.skolemizing_abs env typ (fun env (existentials, sub_locator, typ) ->
+        let (uvs, super_locator, super) = instantiate_abs env super in
 
         let Cf coerce = subtype pos occ env typ super in
 
@@ -587,11 +592,12 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
             (match !uv with
             | Assigned super -> subtype pos occ env typ super
             | Unassigned _ -> subtype pos false env typ (articulate pos super typ))
-        | (Pi (universals, domain, eff, codomain), Pi (universals', domain', eff', codomain')) ->
+        | ( Pi (universals, domain_locator, domain, eff, codomain)
+          , Pi (universals', domain_locator', domain', eff', codomain') ) ->
             Env.skolemizing_arrow env (universals', domain', eff', codomain')
                 (fun env (universals', domain', eff', codomain') ->
-                    let (uvs, domain, eff, codomain) =
-                        instantiate_arrow env (universals, domain, eff, codomain) in
+                    let (uvs, domain_locator, domain, eff, codomain) =
+                        instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 
                     let Cf coerce_domain = subtype pos occ env domain' domain in
                     sub_eff pos eff eff';
@@ -635,7 +641,7 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
     | (None, None) -> Cf coerce
 
 and unify_abs pos env typ typ' : coercion option = match (typ, typ') with
-    | (([], typ), ([], typ')) -> unify pos env typ typ'
+    | (([], Hole, typ), ([], Hole, typ')) -> unify pos env typ typ'
 
 and unify pos env typ typ' : coercion option=
     let (typ, co) = whnf pos env typ in
@@ -686,8 +692,8 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option = match (typ, 
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
 and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
-    | ([], typ) -> check_uv_assignee pos uv level typ
-    | (_ :: _, _) -> raise (TypeError pos) (* not a monotype *)
+    | ([], Hole, typ) -> check_uv_assignee pos uv level typ
+    | (_ :: _, _, _) -> raise (TypeError pos) (* not a monotype *)
 
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
 and check_uv_assignee pos uv level : typ -> unit = function
@@ -705,10 +711,10 @@ and check_uv_assignee pos uv level : typ -> unit = function
         if level' <= level
         then ()
         else raise (TypeError pos) (* ov would escape *)
-    | Pi ([], domain, _, codomain) ->
+    | Pi ([], domain_locator, domain, _, codomain) ->
         check_uv_assignee pos uv level domain;
         check_uv_assignee_abs pos uv level codomain
-    | Pi (_ :: _, _, _, _) -> raise (TypeError pos) (* not a monotype *)
+    | Pi (_ :: _, _, _, _, _) -> raise (TypeError pos) (* not a monotype *)
     | Record fields ->
         List.iter (fun {label = _; typ} -> check_uv_assignee pos uv level typ) fields
     | Type carrie -> check_uv_assignee_abs pos uv level carrie

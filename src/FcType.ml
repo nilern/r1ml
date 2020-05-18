@@ -1,6 +1,3 @@
-type partial = |
-type complete = |
-
 type kind
     = ArrowK of kind * kind
     | TypeK
@@ -15,26 +12,26 @@ type ov = binding * level
 
 type uvv =
     | Unassigned of Name.t * level
-    | Assigned of complete t
+    | Assigned of typ
 
 and uv = uvv ref
 
-and 'a abs = binding list * 'a t
+and abs = binding list * locator * t
 
-and _ t =
-    | Pi : binding list * 'a t * effect * 'a abs -> 'a t
-    | Record : 'a field list -> 'a t
-    | Fn : Name.t * 'a t -> 'a t
-    | App : 'a t * 'a t -> 'a t
-    | Type : 'a abs -> 'a t
-    | Use : binding -> 'a t
-    | Ov : ov -> 'a t
-    | Uv : uv -> 'a t
-    | Int : 'a t
-    | Bool : 'a t
-    | Hole : partial t
+and t =
+    | Pi of binding list * locator * t * effect * abs
+    | Record of field list
+    | Fn of Name.t * t
+    | App of t * t
+    | Type of abs
+    | Use of binding
+    | Ov of ov
+    | Uv of uv
+    | Int
+    | Bool
+    | Hole
 
-and 'a field = {label : string; typ : 'a t}
+and field = {label : string; typ : t}
 
 and coercion =
     | Refl of typ
@@ -45,8 +42,9 @@ and coercion =
     | AUse of Name.t
     | TypeCo of coercion
 
-and typ = complete t
-and template = partial t
+and typ = t
+and locator = t
+and template = t
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
@@ -61,20 +59,21 @@ and domain_kind_to_doc domain = match domain with
     | ArrowK _ -> PPrint.parens (kind_to_doc domain)
     | _ -> kind_to_doc domain
 
-let rec abs_to_doc : type a . a abs -> PPrint.document = function
-    | ([], body) -> to_doc body
-    | (params, body) ->
+let rec abs_to_doc = function
+    | ([], Hole, body) -> to_doc body
+    | (params, locator, body) ->
         PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc params))
-            (PPrint.dot ^^ PPrint.blank 1 ^^ to_doc body)
+            (PPrint.dot ^^ PPrint.blank 1
+                ^^ PPrint.parens (to_doc locator ^^ PPrint.comma ^/^ to_doc body))
 
-and to_doc : type a . a t -> PPrint.document = function
-    | Pi ([], domain, eff, codomain) ->
+and to_doc = function
+    | Pi ([], Hole, domain, eff, codomain) ->
         PPrint.prefix 4 1 (domain_to_doc domain) 
             (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
-    | Pi (universals, domain, eff, codomain) ->
+    | Pi (universals, locator, domain, eff, codomain) ->
         PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
             (PPrint.dot ^^ PPrint.blank 1
-             ^^ PPrint.prefix 4 1 (domain_to_doc domain) 
+             ^^ PPrint.prefix 4 1 (PPrint.parens (to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
                     (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
     | Record fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
@@ -94,7 +93,7 @@ and to_doc : type a . a t -> PPrint.document = function
     | Bool -> PPrint.string "__bool"
     | Hole -> PPrint.string "_"
 
-and domain_to_doc : type a . a t -> PPrint.document = function
+and domain_to_doc = function
     | (Pi _ | Fn _) as domain -> PPrint.parens (to_doc domain)
     | Uv uv ->
         (match !uv with
@@ -102,7 +101,7 @@ and domain_to_doc : type a . a t -> PPrint.document = function
         | Unassigned _ -> uv_to_doc uv)
     | domain -> to_doc domain
 
-and callee_to_doc : type a . a t -> PPrint.document = function
+and callee_to_doc = function
     | (Pi _ | Fn _) as callee -> PPrint.parens (to_doc callee)
     | Uv uv ->
         (match !uv with
@@ -110,7 +109,7 @@ and callee_to_doc : type a . a t -> PPrint.document = function
         | Unassigned _ -> uv_to_doc uv)
     | callee -> to_doc callee
 
-and arg_to_doc  : type a . a t -> PPrint.document = function
+and arg_to_doc = function
     | (Pi _ | Fn _ | App _) as arg -> PPrint.parens (to_doc arg)
     | Uv uv ->
         (match !uv with
@@ -118,7 +117,7 @@ and arg_to_doc  : type a . a t -> PPrint.document = function
         | Unassigned _ -> uv_to_doc uv)
     | arg -> to_doc arg
 
-and field_to_doc : type a . a field -> PPrint.document = fun {label; typ} ->
+and field_to_doc {label; typ} =
     PPrint.string label ^/^ PPrint.colon ^/^ to_doc typ
 
 and binding_to_doc (name, kind) =
@@ -163,9 +162,8 @@ and instantiee_to_doc = function
 
 let freshen (name, kind) = (Name.freshen name, kind)
 
-let sibling uv = match uv with
-    | {contents = Unassigned (_, level)} ->
-        ref (Unassigned (Name.fresh (), level))
+let sibling = function
+    | {contents = Unassigned (_, level)} -> ref (Unassigned (Name.fresh (), level))
     | {contents = Assigned _} -> failwith "unreachable"
 
 (* NOTE: On scope entry hygienic substitution requires that:
@@ -179,22 +177,23 @@ let sibling uv = match uv with
     second one, binders need to be renamed, which also achieves the first one. The required
     renaming can be incorporated into the substitution. *)
 
-let rec substitute_abs substitution (params, body) =
+let rec substitute_abs substitution (params, locator, body) =
     let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
     let substitution =
         List.fold_left2 (fun substitution (name, _) param' ->
                             Name.Map.add name (Use param') substitution)
                         substitution params params' in
-    (params', substitute substitution body)
+    (params', substitute substitution locator, substitute substitution body)
 
 and substitute substitution = function
-    | Pi (params, domain, eff, codomain) ->
+    | Pi (params, locator, domain, eff, codomain) ->
         let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
             List.fold_left2 (fun substitution (name, _) param' ->
                                 Name.Map.add name (Use param') substitution)
                             substitution params params' in
-        Pi (params', substitute substitution domain, eff, substitute_abs substitution codomain)
+        Pi ( params', substitute substitution locator, substitute substitution domain
+           , eff, substitute_abs substitution codomain )
     | Record fields ->
         Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
     | Fn (param, body) ->
@@ -208,4 +207,5 @@ and substitute substitution = function
         Option.value (Name.Map.find_opt name substitution) ~default: typ
     | Uv {contents = Assigned typ} -> substitute substitution typ
     | (Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
+    | Hole -> Hole
 
