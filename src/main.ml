@@ -27,9 +27,12 @@ let rec repl env =
             print_newline ()
         with
             | SedlexMenhir.ParseError err ->
+                flush stdout;
                 prerr_endline (SedlexMenhir.string_of_ParseError err)
-            | Typer.TypeError pos ->
-                prerr_endline (Typer.type_error_to_string pos));
+            | Typer.TypeError (pos, err) ->
+                flush stdout;
+                PPrint.ToChannel.pretty 1.0 80 stderr (Typer.type_error_to_doc pos err ^^ PPrint.hardline);
+                flush stderr);
         repl env
 
 let () =

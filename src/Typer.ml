@@ -2,6 +2,13 @@ let (^/^) = PPrint.(^/^)
 
 open FcType
 open FcTerm
+
+type abs = FcType.abs
+type typ = FcType.t
+type locator = FcType.locator
+type ov = FcType.ov
+type uv = FcType.uv
+type effect = Ast.effect
 type 'a with_pos = 'a Ast.with_pos
 
 type 'a typing = {term : 'a; typ : FcType.typ; eff : Ast.effect}
@@ -11,10 +18,40 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : Ast.effect}
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (expr with_pos -> expr with_pos)
 
-exception TypeError of span
+type error =
+    | Unbound of Name.t
+    | MissingField of typ * string
+    | SubEffect of effect * effect
+    | SubType of typ * typ
+    | Unify of typ * typ
+    | ImpureType of Ast.expr
+    | Escape of ov
+    | Occurs of uv * typ
+    | Polytype of abs
+    | PolytypeInference of abs
+    | RecordArticulation of typ
+    | RecordArticulationL of locator
 
-let type_error_to_string (({pos_fname; _}, _) as span : Ast.span) =
-    "Type error in " ^ pos_fname ^ " at " ^ Ast.span_to_string span
+exception TypeError of span * error
+
+let type_error_to_doc (({pos_fname; _}, _) as span : Ast.span) err =
+    PPrint.string "Type error in" ^/^ PPrint.string pos_fname ^/^ PPrint.string "at"
+        ^/^ PPrint.string (Ast.span_to_string span) ^/^ PPrint.colon ^/^
+    (match err with
+    | Unbound name -> PPrint.string "unbound name" ^/^ Name.to_doc name
+    | MissingField (typ, label) -> FcType.to_doc typ ^/^ PPrint.string "is missing field" ^/^ PPrint.string label
+    | SubEffect (eff, eff') -> Ast.effect_to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.effect_to_doc eff'
+    | SubType (typ, super) -> FcType.to_doc typ ^/^ PPrint.string "is not a subtype of" ^/^ FcType.to_doc super
+    | Unify (typ, typ') -> FcType.to_doc typ ^/^ PPrint.string "does no unify with" ^/^ FcType.to_doc typ'
+    | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.expr_to_doc expr
+    | Escape ((name, _), _) -> Name.to_doc name ^/^ PPrint.string "would escape"
+    | Occurs (uv, typ) -> FcType.to_doc (Uv uv) ^/^ PPrint.string "occurs in" ^/^ FcType.to_doc typ
+    | Polytype typ -> FcType.abs_to_doc typ ^/^ PPrint.string "is not a monotype"
+    | PolytypeInference typ -> PPrint.string "tried to infer polytype" ^/^ FcType.abs_to_doc typ
+    | RecordArticulation typ ->
+        PPrint.string "tried to articulate record type" ^/^ FcType.to_doc typ
+    | RecordArticulationL typ ->
+        PPrint.string "tried to articulate record type" ^/^ FcType.locator_to_doc typ)
 
 module Env = struct
     type val_binder =
@@ -173,7 +210,7 @@ module Env = struct
                 | Some def -> ({env with scopes}, def)
                 | None -> get scopes')
             | (Existential _ | Universal _ | Axiom _) :: scopes' -> get scopes'
-            | [] -> raise (TypeError pos)
+            | [] -> raise (TypeError (pos, Unbound name))
         in get env.scopes
 
     let get_implementation env ((name, _), _) =
@@ -374,12 +411,12 @@ and kindcheck env (typ : Ast.typ with_pos) =
                 | (_, Type typ) ->
                     let (_, locator, typ) = reabstract env typ in
                     (locator, typ)
-                | _ -> raise (TypeError typ.pos))
-            | _ -> raise (TypeError typ.pos))
+                | _ -> failwith "unreachable")
+            | _ -> raise (TypeError (typ.pos, ImpureType expr)))
         | Ast.Singleton expr ->
             (match typeof env expr with
             | {term = _; typ; eff = Pure} -> (Hole, typ)
-            | _ -> raise (TypeError typ.pos))
+            | _ -> raise (TypeError (typ.pos, ImpureType expr.v)))
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
             (TypeL (OvP ov), Type ([], Hole, Ov ov))
@@ -455,7 +492,7 @@ and lookup pos env name =
             | ([], Hole, typ) ->
                 let _ = unify pos env typ typ' in
                 (Hole, lvalue)
-            | _ -> raise (TypeError pos))
+            | _ -> raise (TypeError (pos, PolytypeInference typ)))
         | _ -> failwith "unreachable: non-decl from decl `lookup`")
     | (env, ({contents = Env.GreyDecl _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
@@ -478,7 +515,7 @@ and lookup pos env name =
                 let co = unify pos env typ typ' in
                 binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
                 (Hole, lvalue)
-            | _ -> raise (TypeError pos))
+            | _ -> raise (TypeError (pos, PolytypeInference typ)))
         | _ -> failwith "unreachable: non-ann from ann `lookup`")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
@@ -535,7 +572,7 @@ and articulate pos = function
                         uv' := Assigned typ;
                         typ
                     end)
-            | Record _ -> raise (TypeError pos) (* no can do without row typing *)
+            | Record _ -> raise (TypeError (pos, RecordArticulation template)) (* no can do without row typing *)
             | Use _ -> failwith "unreachable: `Use` as template of `articulate`"))
     | _ -> failwith "unreachable: `articulate` on non-uv"
 
@@ -553,7 +590,7 @@ and articulate_template pos = function
                 let typ = Type ([], Hole, Uv (sibling uv)) in
                 uv := Assigned typ;
                 typ
-            | RecordL [{label = _; typ = Hole}] -> raise (TypeError pos))) (* no can do without row typing *)
+            | RecordL [{label = _; typ = Hole}] -> raise (TypeError (pos, RecordArticulationL template)))) (* no can do without row typing *)
     | _ -> failwith "unreachable: `articulate` on non-uv"
 
 (* # Focalization *)
@@ -567,14 +604,14 @@ and focalize pos env typ (template : FcType.template) = match (typ, template) wi
     | (FcType.Record fields, RecordL ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
         | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ = field_typ}])
-        | None -> raise (TypeError pos))
+        | None -> raise (TypeError (pos, MissingField (typ, label))))
 
 (* # Subtyping *)
 
 and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Pure, Ast.Pure) -> ()
     | (Ast.Pure, Ast.Impure) -> ()
-    | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
+    | (Ast.Impure, Ast.Pure) -> raise (TypeError (pos, SubEffect (eff, eff')))
     | (Ast.Impure, Ast.Impure) -> ()
 
 and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locator, super) : ov list * locator * typ) =
@@ -654,7 +691,7 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
                 | Some {label = _; typ} ->
                     let Cf coerce = subtype pos occ env typ super in
                     {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}}
-                | None -> raise (TypeError pos)
+                | None -> raise (TypeError (pos, MissingField (typ, label)))
             ) super_fields in
             Cf (fun v -> {pos; v = Letrec ([(pos, selectee, v)], {pos; v = Record fields})})
         | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
@@ -723,7 +760,7 @@ and resolve pos env typ locator super =
                         List.find (fun {label = label'; typ = _} -> label' = label) super_fields in
                     let (typ, super) = resolve pos env typ locator super in
                     ({label; typ}, {label; typ = super})
-                | None -> raise (TypeError pos)
+                | None -> raise (TypeError (pos, MissingField (typ, label)))
             ) field_locators in
             let (fields, super_fields) = List.split fields in
             (Record fields, Record super_fields)
@@ -783,44 +820,46 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option = match (typ, 
     | (Ov ov, Ov ov')->
         if ov = ov'
         then None
-        else raise (TypeError pos)
+        else raise (TypeError (pos, Unify (typ, typ')))
     | (Int, Int) | (Bool, Bool) -> None
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
 and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
     | ([], Hole, typ) -> check_uv_assignee pos uv level typ
-    | (_ :: _, _, _) -> raise (TypeError pos) (* not a monotype *)
+    | (_ :: _, _, _) as typ -> raise (TypeError (pos, Polytype typ)) (* not a monotype *)
     | _ -> failwith "unreachable"
 
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
-and check_uv_assignee pos uv level : typ -> unit = function
-    | Uv uv' ->
-        if uv = uv'
-        then raise (TypeError pos) (* occurs *)
-        else
-            (match !uv' with
-            | Assigned typ -> check_uv_assignee pos uv level typ
-            | Unassigned (name, level') ->
-                if level' <= level
-                then ()
-                else uv' := Unassigned (name, level)) (* hoist *)
-    | Ov (_, level') ->
-        if level' <= level
-        then ()
-        else raise (TypeError pos) (* ov would escape *)
-    | Fn (_, body) -> check_uv_assignee pos uv level body
-    | Pi ([], domain_locator, domain, _, codomain) ->
-        check_uv_assignee pos uv level domain;
-        check_uv_assignee_abs pos uv level codomain
-    | Pi (_ :: _, _, _, _, _) -> raise (TypeError pos) (* not a monotype *)
-    | Record fields ->
-        List.iter (fun {label = _; typ} -> check_uv_assignee pos uv level typ) fields
-    | Type carrie -> check_uv_assignee_abs pos uv level carrie
-    | App (callee, arg) ->
-        check_uv_assignee pos uv level callee;
-        check_uv_assignee pos uv level arg
-    | Int | Bool -> ()
-    | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`"
+and check_uv_assignee pos uv level typ =
+    let rec check = function
+        | Uv uv' ->
+            if uv = uv'
+            then raise (TypeError (pos, Occurs (uv, typ))) (* occurs *)
+            else
+                (match !uv' with
+                | Assigned typ -> check_uv_assignee pos uv level typ
+                | Unassigned (name, level') ->
+                    if level' <= level
+                    then ()
+                    else uv' := Unassigned (name, level)) (* hoist *)
+        | Ov ((_, level') as ov) ->
+            if level' <= level
+            then ()
+            else raise (TypeError (pos, Escape ov)) (* ov would escape *)
+        | Fn (_, body) -> check_uv_assignee pos uv level body
+        | Pi ([], domain_locator, domain, _, codomain) ->
+            check_uv_assignee pos uv level domain;
+            check_uv_assignee_abs pos uv level codomain
+        | Pi (_ :: _, _, _, _, _) -> raise (TypeError (pos, Polytype ([], Hole, typ))) (* not a monotype *)
+        | Record fields ->
+            List.iter (fun {label = _; typ} -> check_uv_assignee pos uv level typ) fields
+        | Type carrie -> check_uv_assignee_abs pos uv level carrie
+        | App (callee, arg) ->
+            check_uv_assignee pos uv level callee;
+            check_uv_assignee pos uv level arg
+        | Int | Bool -> ()
+        | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`"
+    in check typ
 
 (* # REPL support *)
 

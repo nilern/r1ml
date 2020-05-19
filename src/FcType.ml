@@ -230,6 +230,13 @@ and substitute substitution = function
     | (Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
 
 and substitute_locator substitution : locator -> locator = function
+    | PiL (params, eff, codomain) ->
+        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let substitution =
+            List.fold_left2 (fun substitution (name, _) param' ->
+                                Name.Map.add name (UseP param') substitution)
+                            substitution params params' in
+        PiL (params', eff, substitute_locator substitution codomain)
     | RecordL fields ->
         RecordL (List.map (fun {label; typ} -> {label; typ = substitute_locator substitution typ})
                           fields)
