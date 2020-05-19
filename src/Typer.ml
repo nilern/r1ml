@@ -117,6 +117,22 @@ module Env = struct
               (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
         )
 
+    let skolemizing_located_arrow ({scopes; current_level} as env)
+            (locator_universals, codomain_locator) (universals, domain, eff, codomain) f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let universals' = List.map FcType.freshen universals in
+            let skolems = List.map (fun binding -> (binding, level)) universals' in
+            let substitution = List.fold_left2 (fun substitution (name, _) skolem ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty universals skolems in
+            let locator_substitution = List.fold_left2 (fun substitution (name, _) skolem ->
+                Name.Map.add name (Ov skolem) substitution
+            ) Name.Map.empty locator_universals skolems in
+            f {env with scopes = Universal skolems :: scopes}
+              (universals', substitute locator_substitution codomain_locator)
+              (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
+        )
     let uv {current_level = {contents = level}; _} binding =
         ref (Unassigned (binding, level))
 
@@ -547,11 +563,12 @@ and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
     | (Ast.Impure, Ast.Impure) -> ()
 
-and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, locator, super) : ov list * typ * typ) =
+and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locator, super) : ov list * typ * typ) =
     let axiom_bindings = List.map (fun (((name, _), _) as param) ->
         (Name.fresh (), param, Uv (Env.uv env name))
     ) existentials in
     let env = Env.push_axioms env axiom_bindings in
+    let (typ, super) = resolve pos env typ super_locator super in
     let Cf coerce = subtype pos occ env typ super in
 
     let axioms = List.map (fun (axname, (((_, kind) as binding, _) as param), impl) ->
@@ -574,6 +591,7 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
     Env.skolemizing_abs env typ (fun env (existentials, sub_locator, typ) ->
         let (uvs, super_locator, super) = instantiate_abs env super in
 
+        let (typ, super) = resolve pos env typ super_locator super in
         let Cf coerce = subtype pos occ env typ super in
 
         let impl = {name = Name.fresh (); typ} in
@@ -604,6 +622,7 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
                     let (uvs, domain_locator, domain, eff, codomain) =
                         instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 
+                    let (domain', domain) = resolve pos env domain' domain_locator domain in
                     let Cf coerce_domain = subtype pos occ env domain' domain in
                     sub_eff pos eff eff';
                     let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
@@ -644,6 +663,62 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
     | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
     | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
     | (None, None) -> Cf coerce
+
+and resolve pos env typ locator super =
+    let rec resolve_path typ path = match path with
+        | FcType.App (path, arg) ->
+            (match arg with
+            | Ov ((param, _), _) -> resolve_path (FcType.Fn (param, typ)) path
+            | _ -> failwith "unreachable: uv path in locator with non-ov arg")
+        | Uv uv ->
+            (match !uv with
+            | Assigned _ -> ()
+            | Unassigned (_, level) ->
+                check_uv_assignee pos uv level typ;
+                uv := Assigned typ)
+        | Ov ov ->
+            (match Env.get_implementation env ov with
+            | Some (_, _, path) -> resolve_path typ path
+            | None -> ()) in
+
+    let rec resolve_whnf env typ locator super = match (typ, locator, super) with
+        | ( Pi (universals, domain_locator, domain, Pure, codomain)
+          , Pi (locator_universals, _, _, Pure, ([], Hole, codomain_locator))
+          , Pi (universals', _, domain', Pure, ([], Hole, codomain')) ) ->
+            Env.skolemizing_located_arrow env 
+                (locator_universals, codomain_locator)
+                (universals', domain', Ast.Pure, ([], Hole, codomain'))
+                (fun env (locator_universals, codomain_locator)
+                        (universals', domain', eff', (_, _, codomain')) ->
+                    let (uvs, domain_locator, domain, eff, (_, _, codomain)) =
+                        instantiate_arrow env (universals, domain_locator, domain, Ast.Pure, codomain) in
+
+                    let (domain', domain) = resolve pos env domain' domain_locator domain in
+                    let (codomain, codomain') =
+                        resolve pos env codomain codomain_locator codomain' in
+
+                    ( IPi (uvs, domain, eff, ([], Hole, codomain))
+                    , IPi ( List.map (fun def -> FcType.Use def) universals', domain', eff'
+                          , ([], Hole, codomain') ) ))
+        | (Record fields, Record field_locators, Record super_fields) ->
+            let fields = List.map (fun {label; typ = locator} ->
+                match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
+                | Some {label = _; typ} ->
+                    let {label = _; typ = super} = (* if locator has a field, super must also: *)
+                        List.find (fun {label = label'; typ = _} -> label' = label) super_fields in
+                    let (typ, super) = resolve pos env typ locator super in
+                    ({label; typ}, {label; typ = super})
+                | None -> raise (TypeError pos)
+            ) field_locators in
+            let (fields, super_fields) = List.split fields in
+            (Record fields, Record super_fields)
+        | (Type ([], Hole, impl), Type ([], Hole, path), Type _) ->
+            let (impl, _) = whnf pos env impl in
+            resolve_path impl path;
+            (typ, super)
+        | (_, Hole, _) -> (typ, super) in
+    let (typ, _) = whnf pos env typ in
+    resolve_whnf env typ locator super
 
 and unify_abs pos env typ typ' : coercion option = match (typ, typ') with
     | (([], Hole, typ), ([], Hole, typ')) -> unify pos env typ typ'
@@ -716,6 +791,7 @@ and check_uv_assignee pos uv level : typ -> unit = function
         if level' <= level
         then ()
         else raise (TypeError pos) (* ov would escape *)
+    | Fn (_, body) -> check_uv_assignee pos uv level body
     | Pi ([], domain_locator, domain, _, codomain) ->
         check_uv_assignee pos uv level domain;
         check_uv_assignee_abs pos uv level codomain
