@@ -228,7 +228,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
-        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Int, Impure, ([], Hole, Int))) with
+        (match focalize callee_expr.pos env callee_typ (PiL ([], Impure, Hole)) with
         | (coerce, Pi (universals, locator, domain, app_eff, ((_, _, concr_cod) as codomain))) ->
             let (uvs, domain_locator, domain, app_eff, codomain) =
                 instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
@@ -259,7 +259,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.Select (record, label) ->
         let {term = record; typ = record_typ; eff} = typeof env record in
         let label = Name.to_string label in
-        let shape = FcType.Record [{label; typ = Int}] in
+        let shape = FcType.RecordL [{label; typ = Hole}] in
         (match focalize record.pos env record_typ shape with
         | (coerce, Record [{label = _; typ}]) ->
             let selectee = {name = Name.fresh (); typ = record_typ} in
@@ -370,7 +370,7 @@ and kindcheck env (typ : Ast.typ with_pos) =
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
-                (match focalize typ.pos env proxy_typ (Type ([], Hole, Int)) with
+                (match focalize typ.pos env proxy_typ (TypeL (UseP (Name.fresh (), TypeK))) with
                 | (_, Type typ) ->
                     let (_, locator, typ) = reabstract env typ in
                     (locator, typ)
@@ -539,15 +539,32 @@ and articulate pos = function
             | Use _ -> failwith "unreachable: `Use` as template of `articulate`"))
     | _ -> failwith "unreachable: `articulate` on non-uv"
 
+and articulate_template pos = function
+    | Uv uv as uv_typ -> fun template ->
+        (match uv with
+        | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
+        | {contents = Unassigned (_, level)} ->
+            (match template with
+            | PiL ([], Impure, Hole) ->
+                let typ = Pi ([], Hole, Uv (sibling uv), Impure, ([], Hole, Uv (sibling uv))) in
+                uv := Assigned typ;
+                typ
+            | TypeL (UseP _) ->
+                let typ = Type ([], Hole, Uv (sibling uv)) in
+                uv := Assigned typ;
+                typ
+            | RecordL [{label = _; typ = Hole}] -> raise (TypeError pos))) (* no can do without row typing *)
+    | _ -> failwith "unreachable: `articulate` on non-uv"
+
 (* # Focalization *)
 
 and focalize pos env typ (template : FcType.template) = match (typ, template) with
     | (Uv uv, _) ->
         (match !uv with
         | Assigned typ -> focalize pos env typ template
-        | Unassigned _ -> ((fun v -> v), articulate pos typ template))
-    | (Pi _, Pi _) | (Type _, Type _) -> ((fun v -> v), typ)
-    | (FcType.Record fields, FcType.Record ({label; typ = _} :: _)) ->
+        | Unassigned _ -> ((fun v -> v), articulate_template pos typ template))
+    | (Pi _, PiL _) | (Type _, TypeL _) -> ((fun v -> v), typ)
+    | (FcType.Record fields, RecordL ({label; typ = _} :: _)) ->
         (match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
         | Some {label = _; typ = field_typ} -> ((fun v -> v), Record [{label; typ = field_typ}])
         | None -> raise (TypeError pos))

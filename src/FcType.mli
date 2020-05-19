@@ -60,7 +60,7 @@ and coercion =
     | TypeCo of coercion
 
 and typ = t
-and template = t
+and template = locator
 
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document

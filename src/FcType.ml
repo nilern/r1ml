@@ -55,7 +55,7 @@ and coercion =
     | TypeCo of coercion
 
 and typ = t
-and template = t
+and template = locator
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
