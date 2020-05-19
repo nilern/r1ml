@@ -30,7 +30,7 @@ module Env = struct
         = Repl of (Name.t, val_binder ref) Hashtbl.t
         | Existential of binding list ref * level
         | Universal of ov list
-        | Axiom of (Name.t * ov * FcType.typ) Name.Map.t
+        | Axiom of (Name.t * ov * uv) Name.Map.t
         | Fn of val_binder ref
         | Sig of val_binder ref Name.Map.t
         | Struct of val_binder ref Name.Map.t
@@ -76,7 +76,7 @@ module Env = struct
             let level = !current_level in
             let skolems = List.map (fun binding -> (binding, level)) params in
             let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty skolems in
             f {env with scopes = Universal skolems :: scopes}
               (substitute substitution body)
@@ -87,10 +87,10 @@ module Env = struct
             let level = !current_level in
             let skolems = List.map (fun binding -> (binding, level)) existentials in
             let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty skolems in
             f {env with scopes = Universal skolems :: scopes}
-              (substitute substitution locator, substitute substitution domain)
+              (substitute_locator substitution locator, substitute substitution domain)
         )
 
     let skolemizing_abs ({scopes; current_level} as env) (existentials, locator, body) f =
@@ -99,10 +99,10 @@ module Env = struct
             let existentials' = List.map FcType.freshen existentials in
             let skolems = List.map (fun binding -> (binding, level)) existentials' in
             let substitution = List.fold_left (fun substitution (((name, _), _) as skolem) ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty skolems in
             f {env with scopes = Existential (ref existentials', level) :: scopes}
-              (existentials', substitute substitution locator, substitute substitution body)
+              (existentials', substitute_locator substitution locator, substitute substitution body)
         )
 
     let skolemizing_arrow ({scopes; current_level} as env) (universals, domain, eff, codomain) f =
@@ -111,7 +111,7 @@ module Env = struct
             let universals' = List.map FcType.freshen universals in
             let skolems = List.map (fun binding -> (binding, level)) universals' in
             let substitution = List.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty universals skolems in
             f {env with scopes = Universal skolems :: scopes}
               (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
@@ -124,13 +124,13 @@ module Env = struct
             let universals' = List.map FcType.freshen universals in
             let skolems = List.map (fun binding -> (binding, level)) universals' in
             let substitution = List.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty universals skolems in
             let locator_substitution = List.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (Ov skolem) substitution
+                Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty locator_universals skolems in
             f {env with scopes = Universal skolems :: scopes}
-              (universals', substitute locator_substitution codomain_locator)
+              (universals', substitute_locator locator_substitution codomain_locator)
               (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
         )
     let uv {current_level = {contents = level}; _} binding =
@@ -188,18 +188,18 @@ module Env = struct
 end
 
 let instantiate_abs env (existentials, locator, body) =
-    let uvs = List.map (fun (name, _) -> Uv (Env.uv env name)) existentials in
+    let uvs = List.map (fun (name, _) -> Env.uv env name) existentials in
     let substitution = List.fold_left2 (fun substitution (name, _) uv ->
-            Name.Map.add name uv substitution
+            Name.Map.add name (UvP uv) substitution
     ) Name.Map.empty existentials uvs in
-    (uvs, substitute substitution locator, substitute substitution body)
+    (uvs, substitute_locator substitution locator, substitute substitution body)
 
-let instantiate_arrow env (universals, (domain_locator : template), domain, eff, codomain) =
-    let uvs : typ list = List.map (fun (name, _) -> Uv (Env.uv env name)) universals in
+let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
+    let uvs = List.map (fun (name, _) -> Env.uv env name) universals in
     let substitution = List.fold_left2 (fun substitution (name, _) uv ->
-            Name.Map.add name uv substitution
+            Name.Map.add name (UvP uv) substitution
     ) Name.Map.empty universals uvs in
-    ( uvs, substitute substitution domain_locator, substitute substitution domain
+    ( uvs, substitute_locator substitution domain_locator, substitute substitution domain
     , eff, substitute_abs substitution codomain )
 
 (* # Effects *)
@@ -228,7 +228,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
-        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Hole, Impure, ([], Hole, Hole))) with
+        (match focalize callee_expr.pos env callee_typ (Pi ([], Hole, Int, Impure, ([], Hole, Int))) with
         | (coerce, Pi (universals, locator, domain, app_eff, ((_, _, concr_cod) as codomain))) ->
             let (uvs, domain_locator, domain, app_eff, codomain) =
                 instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
@@ -236,7 +236,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             let {term = arg; typ = _; eff = arg_eff} = check env ([], Hole, domain) arg in
             { term = { pos = callee_expr.pos
                      ; v = Letrec ( [(callee_expr.pos, callee, callee_expr)]
-                                  , {expr with v = App (coerce {expr with v = Use callee}, uvs, arg)} ) }
+                                  , {expr with v = App (coerce {expr with v = Use callee}, List.map (fun uv -> Uv uv) uvs, arg)} ) }
             ; typ = concr_cod (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable: callee focalization returned non-function")
@@ -259,7 +259,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
     | Ast.Select (record, label) ->
         let {term = record; typ = record_typ; eff} = typeof env record in
         let label = Name.to_string label in
-        let shape = FcType.Record [{label; typ = Hole}] in
+        let shape = FcType.Record [{label; typ = Int}] in
         (match focalize record.pos env record_typ shape with
         | (coerce, Record [{label = _; typ}]) ->
             let selectee = {name = Name.fresh (); typ = record_typ} in
@@ -327,9 +327,9 @@ and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been
 and reabstract env (params, locator, body) =
     let params' = List.map (fun param -> Env.generate env (freshen param)) params in
     let substitution = List.fold_left2 (fun substitution (name, _) param' ->
-        Name.Map.add name (Ov param') substitution
+        Name.Map.add name (OvP param') substitution
     ) Name.Map.empty params params' in
-    (params', substitute substitution locator, substitute substitution body)
+    (params', substitute_locator substitution locator, substitute substitution body)
 
 and kindcheck env (typ : Ast.typ with_pos) =
     let rec elaborate env (typ : Ast.typ with_pos) =
@@ -351,26 +351,26 @@ and kindcheck env (typ : Ast.typ with_pos) =
                     ) in
                     let substitution = List.fold_left2 (fun substitution (name, _) existential ->
                         let path = List.fold_left (fun path arg ->
-                            FcType.App (path, Use arg)
-                        ) (FcType.Use existential) universals in
+                            AppP (path, UseP arg)
+                        ) (UseP existential) universals in
                         Name.Map.add name path substitution
                     ) Name.Map.empty existentials existentials' in
-                    let codomain = ( existentials', substitute substitution codomain_locator
+                    let codomain = ( existentials', substitute_locator substitution codomain_locator
                                    , substitute substitution codomain_impl ) in
                     let (_, codomain_locator, codomain) = reabstract env codomain in
-                    ( Pi (universals, Hole, Hole, eff, ([], Hole, codomain_locator))
+                    ( PiL (universals, eff, codomain_locator)
                     , Pi (universals, domain_locator, domain, eff, ([], Hole, codomain)) )
-                | Impure -> ( Pi (universals, Hole, Hole, eff, ([], Hole, Hole))
+                | Impure -> ( PiL (universals, eff, Hole)
                             , Pi (universals, domain_locator, domain, eff, codomain) )
             )
         | Ast.Sig decls ->
             let env = Env.push_sig env decls in
             let (locators, decls) = List.split (List.map (elaborate_decl env) decls) in
-            (Record locators, Record decls)
+            (RecordL locators, Record decls)
         | Ast.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
-                (match focalize typ.pos env proxy_typ (Type ([], Hole, Hole)) with
+                (match focalize typ.pos env proxy_typ (Type ([], Hole, Int)) with
                 | (_, Type typ) ->
                     let (_, locator, typ) = reabstract env typ in
                     (locator, typ)
@@ -382,7 +382,7 @@ and kindcheck env (typ : Ast.typ with_pos) =
             | _ -> raise (TypeError typ.pos))
         | Ast.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
-            (Type ([], Hole, Ov ov), Type ([], Hole, Ov ov))
+            (TypeL (OvP ov), Type ([], Hole, Ov ov))
         | Ast.Int -> (Hole, Int)
         | Ast.Bool -> (Hole, Bool)
 
@@ -410,7 +410,8 @@ and whnf pos env typ : FcType.typ * coercion option =
         | Fn _ as typ -> (typ, None)
         | Ov ov as typ ->
             (match Env.get_implementation env ov with
-            | Some (axname, _, typ) ->
+            | Some (axname, _, uv) ->
+                let typ = Uv uv in
                 let (typ, co) = eval typ in
                 ( typ
                 , match co with
@@ -424,18 +425,14 @@ and whnf pos env typ : FcType.typ * coercion option =
         | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
-    and apply : FcType.typ -> FcType.typ -> FcType.typ * coercion option = fun callee arg ->
+    and apply : typ -> typ -> typ * coercion option = fun callee arg ->
         match callee with
-        | Fn (param, body) -> eval (substitute (Name.Map.singleton param arg) body)
+        (* FIXME: | Fn (param, body) -> eval (substitute (Name.Map.singleton param arg) body) *)
         | Ov _ | App _ -> (FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with
             | Assigned callee -> apply callee arg
-            | Unassigned _ ->
-                let f = match arg with
-                    | Ov ((name, _), _) -> FcType.Fn (name, (Uv (sibling uv))) in
-                uv := Assigned f;
-                apply f arg)
+            | Unassigned _ -> (FcType.App (callee, arg), None))
         | Pi _ | Record _ | Type _ | Int | Bool | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
     in eval typ
@@ -563,9 +560,9 @@ and sub_eff pos eff eff' = match (eff, eff') with
     | (Ast.Impure, Ast.Pure) -> raise (TypeError pos)
     | (Ast.Impure, Ast.Impure) -> ()
 
-and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locator, super) : ov list * typ * typ) =
+and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locator, super) : ov list * locator * typ) =
     let axiom_bindings = List.map (fun (((name, _), _) as param) ->
-        (Name.fresh (), param, Uv (Env.uv env name))
+        (Name.fresh (), param, Env.uv env name)
     ) existentials in
     let env = Env.push_axioms env axiom_bindings in
     let (typ, super) = resolve pos env typ super_locator super in
@@ -580,7 +577,7 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
                 let (universals, l, r) = axiomatize l r codomain in
                 (def :: universals, l, r)
             | TypeK -> ([], l, r) in
-        let (universals, l, r) = axiomatize (Use binding) impl kind in
+        let (universals, l, r) = axiomatize (Use binding) (Uv impl) kind in
         (axname, universals, l, r)
     ) axiom_bindings in
     match axioms with
@@ -597,7 +594,7 @@ and subtype_abs pos (occ : bool) env (typ : abs) (super : abs) =
         let impl = {name = Name.fresh (); typ} in
         let body = coerce {Ast.pos; v = Use impl} in
         let body = match uvs with
-            | _ :: _ -> {Ast.pos; v = Pack (uvs, body)}
+            | _ :: _ -> {Ast.pos; v = Pack (List.map (fun uv -> Uv uv) uvs, body)}
             | [] -> body in
         Cf (fun v ->
                 match existentials with
@@ -630,7 +627,7 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
                     let param = {name = Name.fresh (); typ = domain'} in
                     let arg = coerce_domain {pos; v = Use param} in
                     Cf (fun v ->
-                            let body = coerce_codomain {pos; v = App (v, uvs, arg)} in
+                            let body = coerce_codomain {pos; v = App (v, List.map (fun uv -> Uv uv) uvs, arg)} in
                             {pos; v = Fn (universals', param, body)})
                 )
         | (FcType.Record fields, FcType.Record super_fields) ->
@@ -666,24 +663,25 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
 
 and resolve pos env typ locator super =
     let rec resolve_path typ path = match path with
-        | FcType.App (path, arg) ->
+        | AppP (path, arg) ->
             (match arg with
-            | Ov ((param, _), _) -> resolve_path (FcType.Fn (param, typ)) path
+            | OvP ((param, _), _) -> resolve_path (FcType.Fn (param, typ)) path
             | _ -> failwith "unreachable: uv path in locator with non-ov arg")
-        | Uv uv ->
+        | UvP uv ->
             (match !uv with
             | Assigned _ -> ()
             | Unassigned (_, level) ->
                 check_uv_assignee pos uv level typ;
                 uv := Assigned typ)
-        | Ov ov ->
+        | OvP ov ->
             (match Env.get_implementation env ov with
-            | Some (_, _, path) -> resolve_path typ path
-            | None -> ()) in
+            | Some (_, _, uv) -> resolve_path typ (UvP uv)
+            | None -> ())
+        | UseP _ -> () in
 
     let rec resolve_whnf env typ locator super = match (typ, locator, super) with
         | ( Pi (universals, domain_locator, domain, Pure, codomain)
-          , Pi (locator_universals, _, _, Pure, ([], Hole, codomain_locator))
+          , PiL (locator_universals, Pure, codomain_locator)
           , Pi (universals', _, domain', Pure, ([], Hole, codomain')) ) ->
             Env.skolemizing_located_arrow env 
                 (locator_universals, codomain_locator)
@@ -697,10 +695,10 @@ and resolve pos env typ locator super =
                     let (codomain, codomain') =
                         resolve pos env codomain codomain_locator codomain' in
 
-                    ( IPi (uvs, domain, eff, ([], Hole, codomain))
+                    ( IPi (List.map (fun uv -> Uv uv) uvs, domain, eff, ([], Hole, codomain))
                     , IPi ( List.map (fun def -> FcType.Use def) universals', domain', eff'
                           , ([], Hole, codomain') ) ))
-        | (Record fields, Record field_locators, Record super_fields) ->
+        | (Record fields, RecordL field_locators, Record super_fields) ->
             let fields = List.map (fun {label; typ = locator} ->
                 match List.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
                 | Some {label = _; typ} ->
@@ -712,11 +710,12 @@ and resolve pos env typ locator super =
             ) field_locators in
             let (fields, super_fields) = List.split fields in
             (Record fields, Record super_fields)
-        | (Type ([], Hole, impl), Type ([], Hole, path), Type _) ->
+        | (Type ([], Hole, impl), TypeL path, Type _) ->
             let (impl, _) = whnf pos env impl in
             resolve_path impl path;
             (typ, super)
-        | (_, Hole, _) -> (typ, super) in
+        | (_, Hole, _) -> (typ, super)
+        | _ -> failwith "unreachable" in
     let (typ, _) = whnf pos env typ in
     resolve_whnf env typ locator super
 
@@ -774,6 +773,7 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option = match (typ, 
 and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
     | ([], Hole, typ) -> check_uv_assignee pos uv level typ
     | (_ :: _, _, _) -> raise (TypeError pos) (* not a monotype *)
+    | _ -> failwith "unreachable"
 
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
 and check_uv_assignee pos uv level : typ -> unit = function

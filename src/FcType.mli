@@ -26,7 +26,7 @@ and abs = binding list * locator * t
 and t =
     | Pi of binding list * locator * t * effect * abs
     | IPi of t list * t * effect * abs
-    | Record of field list
+    | Record of t field list
     | Fn of Name.t * t
     | App of t * t
     | Type of abs
@@ -35,9 +35,20 @@ and t =
     | Uv of uv
     | Int
     | Bool
+
+and locator =
+    | PiL of binding list * effect * locator
+    | RecordL of locator field list
+    | TypeL of path
     | Hole
 
-and field = {label : string; typ : t}
+and 'a field = {label : string; typ : 'a}
+
+and path =
+    | AppP of path * path
+    | OvP of ov
+    | UvP of uv
+    | UseP of binding
 
 and coercion =
     | Refl of typ
@@ -49,7 +60,6 @@ and coercion =
     | TypeCo of coercion
 
 and typ = t
-and locator = t
 and template = t
 
 val kind_to_doc : kind -> PPrint.document
@@ -62,6 +72,7 @@ val coercion_to_doc : coercion -> PPrint.document
 val freshen : binding -> binding
 val sibling : uv -> uv
 
-val substitute_abs : t Name.Map.t -> abs -> abs
-val substitute : t Name.Map.t -> t -> t
+val substitute_abs : path Name.Map.t -> abs -> abs
+val substitute : path Name.Map.t -> t -> t
+val substitute_locator : path Name.Map.t -> locator -> locator
 

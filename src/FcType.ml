@@ -21,7 +21,7 @@ and abs = binding list * locator * t
 and t =
     | Pi of binding list * locator * t * effect * abs
     | IPi of t list * t * effect * abs
-    | Record of field list
+    | Record of t field list
     | Fn of Name.t * t
     | App of t * t
     | Type of abs
@@ -30,9 +30,20 @@ and t =
     | Uv of uv
     | Int
     | Bool
+
+and locator =
+    | PiL of binding list * effect * locator
+    | RecordL of locator field list
+    | TypeL of path
     | Hole
 
-and field = {label : string; typ : t}
+and 'a field = {label : string; typ : 'a}
+
+and path =
+    | AppP of path * path
+    | OvP of ov
+    | UvP of uv
+    | UseP of binding
 
 and coercion =
     | Refl of typ
@@ -44,7 +55,6 @@ and coercion =
     | TypeCo of coercion
 
 and typ = t
-and locator = t
 and template = t
 
 let (^^) = PPrint.(^^)
@@ -60,12 +70,12 @@ and domain_kind_to_doc domain = match domain with
     | ArrowK _ -> PPrint.parens (kind_to_doc domain)
     | _ -> kind_to_doc domain
 
-let rec abs_to_doc = function
+let rec abs_to_doc : abs -> PPrint.document = function
     | ([], Hole, body) -> to_doc body
     | (params, locator, body) ->
         PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc params))
             (PPrint.dot ^^ PPrint.blank 1
-                ^^ PPrint.parens (to_doc locator ^^ PPrint.comma ^/^ to_doc body))
+                ^^ PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc body))
 
 and to_doc = function
     | Pi ([], Hole, domain, eff, codomain) ->
@@ -74,7 +84,7 @@ and to_doc = function
     | Pi (universals, locator, domain, eff, codomain) ->
         PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
             (PPrint.dot ^^ PPrint.blank 1
-             ^^ PPrint.prefix 4 1 (PPrint.parens (to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
+             ^^ PPrint.prefix 4 1 (PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
                     (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
     | Record fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
@@ -92,7 +102,6 @@ and to_doc = function
     | Uv uv -> uv_to_doc uv
     | Int -> PPrint.string "__int"
     | Bool -> PPrint.string "__bool"
-    | Hole -> PPrint.string "_"
 
 and domain_to_doc = function
     | (Pi _ | Fn _) as domain -> PPrint.parens (to_doc domain)
@@ -120,6 +129,9 @@ and arg_to_doc = function
 
 and field_to_doc {label; typ} =
     PPrint.string label ^/^ PPrint.colon ^/^ to_doc typ
+
+and locator_to_doc = function
+    | Hole -> PPrint.underscore
 
 and binding_to_doc (name, kind) =
     PPrint.parens (Name.to_doc name ^/^ PPrint.colon ^/^ kind_to_doc kind)
@@ -161,6 +173,12 @@ and instantiee_to_doc = function
     | (Symm _ | Trans _) as co -> PPrint.parens (coercion_to_doc co)
     | co -> coercion_to_doc co
 
+let rec from_path = function
+    | AppP (callee, arg) -> App (from_path callee, from_path arg)
+    | UvP ov -> Uv ov
+    | OvP ov -> Ov ov
+    | UseP binding -> Use binding
+
 let freshen (name, kind) = (Name.freshen name, kind)
 
 let sibling = function
@@ -182,18 +200,18 @@ let rec substitute_abs substitution (params, locator, body) =
     let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
     let substitution =
         List.fold_left2 (fun substitution (name, _) param' ->
-                            Name.Map.add name (Use param') substitution)
+                            Name.Map.add name (UseP param') substitution)
                         substitution params params' in
-    (params', substitute substitution locator, substitute substitution body)
+    (params', substitute_locator substitution locator, substitute substitution body)
 
 and substitute substitution = function
     | Pi (params, locator, domain, eff, codomain) ->
         let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
             List.fold_left2 (fun substitution (name, _) param' ->
-                                Name.Map.add name (Use param') substitution)
+                                Name.Map.add name (UseP param') substitution)
                             substitution params params' in
-        Pi ( params', substitute substitution locator, substitute substitution domain
+        Pi ( params', substitute_locator substitution locator, substitute substitution domain
            , eff, substitute_abs substitution codomain )
     | Record fields ->
         Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
@@ -205,8 +223,25 @@ and substitute substitution = function
     | App (callee, arg) -> App (substitute substitution callee, substitute substitution arg)
     | Type typ -> Type (substitute_abs substitution typ)
     | (Use (name, _) | Ov ((name, _), _)) as typ ->
-        Option.value (Name.Map.find_opt name substitution) ~default: typ
+        (match Name.Map.find_opt name substitution with
+        | Some path -> from_path path (* OPTIMIZE *)
+        | None -> typ)
     | Uv {contents = Assigned typ} -> substitute substitution typ
     | (Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
+
+and substitute_locator substitution : locator -> locator = function
+    | RecordL fields ->
+        RecordL (List.map (fun {label; typ} -> {label; typ = substitute_locator substitution typ})
+                          fields)
+    | TypeL path -> TypeL (substitute_path substitution path)
     | Hole -> Hole
+
+and substitute_path substitution = function
+    | AppP (callee, arg) ->
+        AppP (substitute_path substitution callee, substitute_path substitution arg)
+    | (UseP (name, _) | OvP ((name, _), _)) as path ->
+        (match Name.Map.find_opt name substitution with
+        | Some path -> path
+        | None -> path)
+    | UvP _ as path -> path
 
