@@ -48,7 +48,7 @@ select
 expr_nestable : expr_nestable_impl { {v = $1; pos = $sloc} }
 
 expr_nestable_impl
-    : "{" defs=separated_list(";", def) "}" { Struct defs }
+    : "{" defs=separated_list(";", def) "}" { Struct (Vector.of_list defs) }
     | "(" expr ")" { $2.v }
     | common_nestable { $1 }
 
@@ -115,7 +115,7 @@ select_typ
 typ_nestable : typ_nestable_impl { {v = $1; pos = $sloc} }
 
 typ_nestable_impl
-    : "{" decls=separated_list(";", decl) "}" { Sig decls }
+    : "{" decls=separated_list(";", decl) "}" { Sig (Vector.of_list decls) }
     | "type" { Type }
     | "(" typ ")" { $2.v }
     | common_nestable { Path $1 }

@@ -14,7 +14,7 @@ and effect = Pure | Impure
 
 and typ
     = Pi of domain * effect * typ with_pos
-    | Sig of decl list
+    | Sig of decl Vector.t
     | Path of expr
     | Singleton of expr with_pos
     | Type
@@ -28,7 +28,7 @@ and expr
     | If of expr with_pos * expr with_pos * expr with_pos
     | App of expr with_pos * expr with_pos
     | Seal of expr with_pos * typ with_pos
-    | Struct of def list
+    | Struct of def Vector.t
     | Select of expr with_pos * Name.t
     | Proxy of typ with_pos
     | Use of Name.t
@@ -49,7 +49,7 @@ let rec typ_to_doc = function
     | Sig decls ->
         PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.semi ^^ PPrint.break 1) PPrint.rbrace
-            decl_to_doc decls
+            decl_to_doc (Vector.to_list decls)
     | Path expr -> expr_to_doc expr
     | Singleton {v = expr; _} -> PPrint.parens (PPrint.equals ^/^ expr_to_doc expr)
     | Type -> PPrint.string "type"
@@ -90,7 +90,7 @@ and expr_to_doc = function
     | Struct defs ->
         PPrint.surround_separate_map 4 1 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.semi ^^ PPrint.break 1) PPrint.rbrace
-            def_to_doc defs
+            def_to_doc (Vector.to_list defs)
     | Select ({v = record; _}, label) ->
         selectee_to_doc record ^^ PPrint.dot ^^ Name.to_doc label
     | Proxy {v = typ; _} -> PPrint.brackets (typ_to_doc typ)

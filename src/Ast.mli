@@ -12,7 +12,7 @@ and effect = Pure | Impure
 
 and typ
     = Pi of domain * effect * typ with_pos
-    | Sig of decl list
+    | Sig of decl Vector.t
     | Path of expr
     | Singleton of expr with_pos
     | Type
@@ -26,7 +26,7 @@ and expr
     | If of expr with_pos * expr with_pos * expr with_pos
     | App of expr with_pos * expr with_pos
     | Seal of expr with_pos * typ with_pos
-    | Struct of def list
+    | Struct of def Vector.t
     | Select of expr with_pos * Name.t
     | Proxy of typ with_pos
     | Use of Name.t

@@ -21,12 +21,14 @@ type uvv =
 and uv = uvv ref
 
 (* Existential (or just `t`) *)
-and abs = binding list * locator * t
+and abs =
+    | Exists of binding Vector1.t * locator * t
+    | NoE of t
 
 and t =
-    | Pi of binding list * locator * t * effect * abs
-    | IPi of t list * t * effect * abs
-    | Record of t field list
+    | Pi of binding Vector.t * locator * t * effect * abs
+    | IPi of t Vector.t * t * effect * abs
+    | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
     | Type of abs
@@ -37,8 +39,8 @@ and t =
     | Bool
 
 and locator =
-    | PiL of binding list * effect * locator
-    | RecordL of locator field list
+    | PiL of binding Vector.t * effect * locator
+    | RecordL of locator field Vector.t
     | TypeL of path
     | Hole
 
@@ -65,7 +67,7 @@ and template = locator
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
-val universal_to_doc : binding list -> PPrint.document -> PPrint.document
+val universal_to_doc : binding Vector.t -> PPrint.document -> PPrint.document
 val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document

@@ -16,12 +16,14 @@ type uvv =
 
 and uv = uvv ref
 
-and abs = binding list * locator * t
+and abs =
+    | Exists of binding Vector1.t * locator * t
+    | NoE of t
 
 and t =
-    | Pi of binding list * locator * t * effect * abs
-    | IPi of t list * t * effect * abs
-    | Record of t field list
+    | Pi of binding Vector.t * locator * t * effect * abs
+    | IPi of t Vector.t * t * effect * abs
+    | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
     | Type of abs
@@ -32,8 +34,8 @@ and t =
     | Bool
 
 and locator =
-    | PiL of binding list * effect * locator
-    | RecordL of locator field list
+    | PiL of binding Vector.t * effect * locator
+    | RecordL of locator field Vector.t
     | TypeL of path
     | Hole
 
@@ -71,25 +73,25 @@ and domain_kind_to_doc domain = match domain with
     | _ -> kind_to_doc domain
 
 let rec abs_to_doc : abs -> PPrint.document = function
-    | ([], Hole, body) -> to_doc body
-    | (params, locator, body) ->
-        PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc params))
+    | Exists (params, locator, body) ->
+        PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ bindings_to_doc (Vector1.to_list params)))
             (PPrint.dot ^^ PPrint.blank 1
                 ^^ PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc body))
+    | NoE typ -> to_doc typ
 
 and to_doc = function
-    | Pi ([], Hole, domain, eff, codomain) ->
-        PPrint.prefix 4 1 (domain_to_doc domain) 
-            (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
     | Pi (universals, locator, domain, eff, codomain) ->
-        PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
-            (PPrint.dot ^^ PPrint.blank 1
-             ^^ PPrint.prefix 4 1 (PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
-                    (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
+        if Vector.length universals > 0
+        then PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc (Vector.to_list universals)))
+                 (PPrint.dot ^^ PPrint.blank 1
+                  ^^ PPrint.prefix 4 1 (PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
+                         (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
+        else PPrint.prefix 4 1 (domain_to_doc domain) 
+                 (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
     | Record fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
-            field_to_doc fields
+            field_to_doc (Vector.to_list fields)
     | Fn (param, body) ->
         PPrint.prefix 4 1
             (PPrint.string "fun" ^^ PPrint.blank 1 ^^ Name.to_doc param
@@ -137,7 +139,8 @@ and locator_to_doc = function
     | RecordL fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
-            (fun {label; typ} -> PPrint.string label ^/^ PPrint.colon ^/^ locator_to_doc typ) fields
+            (fun {label; typ} -> PPrint.string label ^/^ PPrint.colon ^/^ locator_to_doc typ)
+            (Vector.to_list fields)
     | TypeL path -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ path_to_doc path)
     | Hole -> PPrint.underscore
 
@@ -147,7 +150,7 @@ and binding_to_doc (name, kind) =
 and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_doc bindings
 
 and universal_to_doc universals body =
-    PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
+    PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc (Vector.to_list universals)))
         (PPrint.dot ^^ PPrint.blank 1 ^^ body)
 
 and path_to_doc path = to_doc (from_path path)
@@ -206,25 +209,27 @@ let sibling = function
     second one, binders need to be renamed, which also achieves the first one. The required
     renaming can be incorporated into the substitution. *)
 
-let rec substitute_abs substitution (params, locator, body) =
-    let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
-    let substitution =
-        List.fold_left2 (fun substitution (name, _) param' ->
-                            Name.Map.add name (UseP param') substitution)
-                        substitution params params' in
-    (params', substitute_locator substitution locator, substitute substitution body)
+let rec substitute_abs substitution = function
+    | Exists (params, locator, body) ->
+        let params' = Vector1.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let substitution =
+            Vector1.fold_left2 (fun substitution (name, _) param' ->
+                                   Name.Map.add name (UseP param') substitution)
+                               substitution params params' in
+        Exists (params', substitute_locator substitution locator, substitute substitution body)
+    | NoE typ -> NoE (substitute substitution typ)
 
 and substitute substitution = function
     | Pi (params, locator, domain, eff, codomain) ->
-        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let params' = Vector.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
-            List.fold_left2 (fun substitution (name, _) param' ->
-                                Name.Map.add name (UseP param') substitution)
-                            substitution params params' in
+            Vector.fold_left2 (fun substitution (name, _) param' ->
+                                  Name.Map.add name (UseP param') substitution)
+                              substitution params params' in
         Pi ( params', substitute_locator substitution locator, substitute substitution domain
            , eff, substitute_abs substitution codomain )
     | Record fields ->
-        Record (List.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
+        Record (Vector.map (fun {label; typ} -> {label; typ = substitute substitution typ}) fields)
     | Fn (param, body) ->
         (* NOTE: Here we intentionally permit introduced reference capture but still implement
                  shadowing by using Map.remove instead of Name.freshen + Map.add: *)
@@ -241,15 +246,15 @@ and substitute substitution = function
 
 and substitute_locator substitution : locator -> locator = function
     | PiL (params, eff, codomain) ->
-        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let params' = Vector.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
-            List.fold_left2 (fun substitution (name, _) param' ->
-                                Name.Map.add name (UseP param') substitution)
-                            substitution params params' in
+            Vector.fold_left2 (fun substitution (name, _) param' ->
+                                  Name.Map.add name (UseP param') substitution)
+                              substitution params params' in
         PiL (params', eff, substitute_locator substitution codomain)
     | RecordL fields ->
-        RecordL (List.map (fun {label; typ} -> {label; typ = substitute_locator substitution typ})
-                          fields)
+        RecordL (Vector.map (fun {label; typ} -> {label; typ = substitute_locator substitution typ})
+                            fields)
     | TypeL path -> TypeL (substitute_path substitution path)
     | Hole -> Hole
 
@@ -262,24 +267,26 @@ and substitute_path substitution = function
         | None -> path)
     | UvP _ as path -> path
 
-let rec substitute_any_abs substitution (params, locator, body) =
-    let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
-    let substitution =
-        List.fold_left2 (fun substitution (name, _) param' ->
-                            Name.Map.add name (Use param') substitution)
-                        substitution params params' in
-    (params', locator, substitute_any substitution body)
+let rec substitute_any_abs substitution = function
+    | Exists (params, locator, body) ->
+        let params' = Vector1.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let substitution =
+            Vector1.fold_left2 (fun substitution (name, _) param' ->
+                                   Name.Map.add name (Use param') substitution)
+                               substitution params params' in
+        Exists (params', locator, substitute_any substitution body)
+    | NoE typ -> NoE (substitute_any substitution typ)
 
 and substitute_any substitution = function
     | Pi (params, locator, domain, eff, codomain) ->
-        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let params' = Vector.map (fun (name, kind) -> (Name.freshen name, kind)) params in
         let substitution =
-            List.fold_left2 (fun substitution (name, _) param' ->
-                                Name.Map.add name (Use param') substitution)
-                            substitution params params' in
+            Vector.fold_left2 (fun substitution (name, _) param' ->
+                                  Name.Map.add name (Use param') substitution)
+                              substitution params params' in
         Pi (params', locator, substitute_any substitution domain, eff, substitute_any_abs substitution codomain)
     | Record fields ->
-        Record (List.map (fun {label; typ} -> {label; typ = substitute_any substitution typ}) fields)
+        Record (Vector.map (fun {label; typ} -> {label; typ = substitute_any substitution typ}) fields)
     | Fn (param, body) ->
         (* NOTE: Here we intentionally permit introduced reference capture but still implement
                  shadowing by using Map.remove instead of Name.freshen + Map.add: *)

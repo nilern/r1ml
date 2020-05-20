@@ -8,16 +8,16 @@ type coercion = FcType.coercion
 type lvalue = {name : Name.t; typ : typ}
 
 type expr
-    = Fn of FcType.binding list * lvalue * expr with_pos
-    | App of expr with_pos * typ list * expr with_pos
-    | Letrec of def list * expr with_pos
-    | LetType of FcType.binding list * expr with_pos
-    | Axiom of (Name.t * FcType.binding list * typ * typ) list * expr with_pos
+    = Fn of FcType.binding Vector.t * lvalue * expr with_pos
+    | App of expr with_pos * typ Vector.t * expr with_pos
+    | Letrec of def Vector1.t * expr with_pos
+    | LetType of FcType.binding Vector1.t * expr with_pos
+    | Axiom of (Name.t * FcType.binding Vector.t * typ * typ) Vector1.t * expr with_pos
     | Cast of expr with_pos * coercion
-    | Pack of typ list * expr with_pos
-    | Unpack of FcType.binding list * lvalue * expr with_pos * expr with_pos
+    | Pack of typ Vector1.t * expr with_pos
+    | Unpack of FcType.binding Vector1.t * lvalue * expr with_pos * expr with_pos
     | If of expr with_pos * expr with_pos * expr with_pos
-    | Record of field list
+    | Record of field Vector.t
     | Select of expr with_pos * string
     | Proxy of abs 
     | Use of lvalue
@@ -31,10 +31,10 @@ type stmt
     = Def of def
     | Expr of expr with_pos
 
-val letrec : def list -> expr with_pos -> expr
-
 val lvalue_to_doc : lvalue -> PPrint.document
 val expr_to_doc : expr -> PPrint.document
 val def_to_doc : def -> PPrint.document
 val stmt_to_doc : stmt -> PPrint.document
+
+val letrec : def Vector.t -> expr with_pos -> expr
 
