@@ -170,6 +170,15 @@ module Env = struct
               (universals', substitute_locator locator_substitution codomain_locator)
               (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
         )
+
+    let preskolemized ({scopes; current_level} as env) universals f =
+        with_incremented_level env (fun () ->
+            let level = !current_level in
+            let bindings = List.map (fun (FcType.Use binding) -> binding) universals in
+            let skolems = List.map (fun binding -> (binding, level)) bindings in
+            f {env with scopes = Universal skolems :: scopes} bindings
+        )
+
     let uv {current_level = {contents = level}; _} binding =
         ref (Unassigned (binding, level))
 
@@ -257,6 +266,11 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             let env = Env.push_domain env {name; typ = domain} domain_locator in
             Env.with_existential env (fun env existentials ->
                 let {term = body; typ = codomain; eff} = typeof env body in
+                let body = match !existentials with
+                    | _ :: _ ->
+                        let uses = List.map (fun binding -> FcType.Use binding) !existentials in
+                        {body with Ast.v = LetType (!existentials, {body with v = Pack (uses, body)})}
+                    | [] -> body in
                 { term = {expr with v = Fn (universals, {name; typ = domain}, body)} (* FIXME: bind existentials *)
                 ; typ = Pi (universals, domain_locator, domain, eff, (!existentials, Hole, codomain)) (* HACK: Hole *)
                 ; eff = Pure }
@@ -459,7 +473,7 @@ and whnf pos env typ : FcType.typ * coercion option =
             (match !uv with
             | Assigned typ -> eval typ
             | Unassigned _ -> (typ, None))
-        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
+        | (Pi _ | IPi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
     and apply : typ -> typ -> typ * coercion option = fun callee arg ->
@@ -684,6 +698,18 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
                             let body = coerce_codomain {pos; v = App (v, List.map (fun uv -> Uv uv) uvs, arg)} in
                             {pos; v = Fn (universals', param, body)})
                 )
+        | (IPi (universals, domain, eff, codomain), IPi (universals', domain', eff', codomain')) ->
+            Env.preskolemized env universals' (fun env universals' ->
+                let Cf coerce_domain = subtype pos occ env domain' domain in
+                sub_eff pos eff eff';
+                let Cf coerce_codomain = subtype_abs pos occ env codomain codomain' in
+
+                let param = {name = Name.fresh (); typ = domain'} in
+                    let arg = coerce_domain {pos; v = Use param} in
+                    Cf (fun v ->
+                            let body = coerce_codomain {pos; v = App (v, universals, arg)} in
+                            {pos; v = Fn (universals', param, body)})
+            )
         | (FcType.Record fields, FcType.Record super_fields) ->
             let selectee = {name = Name.fresh (); typ = typ} in
             let fields = List.map (fun {label; typ = super} ->

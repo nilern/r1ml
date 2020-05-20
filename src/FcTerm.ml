@@ -11,6 +11,7 @@ type expr
     = Fn of FcType.binding list * lvalue * expr with_pos
     | App of expr with_pos * typ list * expr with_pos
     | Letrec of def list * expr with_pos
+    | LetType of FcType.binding list * expr with_pos
     | Axiom of (Name.t * FcType.binding list * typ * typ) list * expr with_pos
     | Cast of expr with_pos * coercion
     | Pack of typ list * expr with_pos
@@ -59,6 +60,13 @@ let rec expr_to_doc = function
                 (PPrint.align (PPrint.separate_map (PPrint.semi ^^ PPrint.break 1) def_to_doc defs))
                 (PPrint.string "in")
             ^/^ expr_to_doc body.v)
+    | LetType (bindings, body) ->
+        PPrint.group(
+            PPrint.surround 4 1 (PPrint.string "let type")
+                (PPrint.align (PPrint.separate_map (PPrint.semi ^^ PPrint.break 1)
+                                    Type.binding_to_doc bindings))
+                (PPrint.string "in")
+            ^/^ expr_to_doc body.v)
     | If (cond, conseq, alt) ->
         PPrint.string "if" ^/^ expr_to_doc cond.v
             ^/^ PPrint.string "then" ^/^ expr_to_doc conseq.v
@@ -104,19 +112,19 @@ let rec expr_to_doc = function
     | Const c -> Const.to_doc c
 
 and callee_to_doc = function
-    | (Fn _ | Cast _ | Letrec _ | Axiom _ | Unpack _) as callee -> PPrint.parens (expr_to_doc callee)
+    | (Fn _ | Cast _ | Letrec _ | LetType _ | Axiom _ | Unpack _) as callee -> PPrint.parens (expr_to_doc callee)
     | callee -> expr_to_doc callee
 
 and arg_to_doc = function
-    | (Fn _ | Cast _ | Letrec _ | Axiom _ | Unpack _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
+    | (Fn _ | Cast _ | Letrec _ | LetType _ | Axiom _ | Unpack _ | App _) as arg -> PPrint.parens (expr_to_doc arg)
     | arg -> expr_to_doc arg
 
 and axiom_to_doc (name, universals, l, r) = match universals with
     | _ :: _ ->
         PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
             (PPrint.infix 4 1 PPrint.tilde
-                (Type.universal_to_doc universals l)
-                (Type.universal_to_doc universals r))
+                (Type.universal_to_doc universals (FcType.to_doc l))
+                (Type.universal_to_doc universals (FcType.to_doc r)))
     | [] ->
         PPrint.infix 4 1 PPrint.colon (Name.to_doc name)
             (PPrint.infix 4 1 PPrint.tilde
@@ -128,7 +136,7 @@ and castee_to_doc = function
     | callee -> expr_to_doc callee
 
 and selectee_to_doc = function
-    | (Fn _ | Cast _ | Letrec _ | Axiom _ | If _ | App _) as selectee-> PPrint.parens (expr_to_doc selectee)
+    | (Fn _ | Cast _ | Letrec _ | LetType _ | Axiom _ | If _ | App _) as selectee-> PPrint.parens (expr_to_doc selectee)
     | selectee -> expr_to_doc selectee
 
 and def_to_doc ((_, lvalue, {v = expr; _}) : def) =

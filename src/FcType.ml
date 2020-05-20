@@ -131,6 +131,14 @@ and field_to_doc {label; typ} =
     PPrint.string label ^/^ PPrint.colon ^/^ to_doc typ
 
 and locator_to_doc = function
+    | PiL (bindings, eff, codomain) ->
+        universal_to_doc bindings
+            (PPrint.infix 4 1 (Ast.effect_arrow eff) PPrint.underscore (locator_to_doc codomain))
+    | RecordL fields ->
+        PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
+            PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
+            (fun {label; typ} -> PPrint.string label ^/^ PPrint.colon ^/^ locator_to_doc typ) fields
+    | TypeL path -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ path_to_doc path)
     | Hole -> PPrint.underscore
 
 and binding_to_doc (name, kind) =
@@ -140,11 +148,19 @@ and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_d
 
 and universal_to_doc universals body =
     PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc universals))
-        (PPrint.dot ^^ PPrint.blank 1 ^^ to_doc body)
+        (PPrint.dot ^^ PPrint.blank 1 ^^ body)
+
+and path_to_doc path = to_doc (from_path path)
 
 and uv_to_doc uv = match !uv with
     | Unassigned (name, _) -> PPrint.qmark ^^ Name.to_doc name
     | Assigned t -> to_doc t
+
+and from_path = function
+    | AppP (callee, arg) -> App (from_path callee, from_path arg)
+    | UvP ov -> Uv ov
+    | OvP ov -> Ov ov
+    | UseP binding -> Use binding
 
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
@@ -172,12 +188,6 @@ and argco_to_doc = function
 and instantiee_to_doc = function
     | (Symm _ | Trans _) as co -> PPrint.parens (coercion_to_doc co)
     | co -> coercion_to_doc co
-
-let rec from_path = function
-    | AppP (callee, arg) -> App (from_path callee, from_path arg)
-    | UvP ov -> Uv ov
-    | OvP ov -> Ov ov
-    | UseP binding -> Use binding
 
 let freshen (name, kind) = (Name.freshen name, kind)
 

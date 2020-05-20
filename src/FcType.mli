@@ -65,7 +65,7 @@ and template = locator
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
-val universal_to_doc : binding list -> t -> PPrint.document
+val universal_to_doc : binding list -> PPrint.document -> PPrint.document
 val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document
