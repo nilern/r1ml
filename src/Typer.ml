@@ -280,15 +280,15 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
         (match focalize callee_expr.pos env callee_typ (PiL ([], Impure, Hole)) with
-        | (coerce, Pi (universals, locator, domain, app_eff, ((_, _, concr_cod) as codomain))) ->
-            let (uvs, domain_locator, domain, app_eff, codomain) =
+        | (coerce, Pi (universals, locator, domain, app_eff, codomain)) ->
+            let (uvs, domain_locator, domain, app_eff, (existentials, codomain_locator, codomain)) =
                 instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
 
             let {term = arg; typ = _; eff = arg_eff} = check env ([], Hole, domain) arg in
             { term = { pos = callee_expr.pos
                      ; v = Letrec ( [(callee_expr.pos, callee, callee_expr)]
                                   , {expr with v = App (coerce {expr with v = Use callee}, List.map (fun uv -> Uv uv) uvs, arg)} ) }
-            ; typ = concr_cod (* FIXME: Hoist, unpack, axioms, coerce *)
+            ; typ = codomain (* FIXME: Hoist, unpack, axioms, coerce *)
             ; eff = join_effs (join_effs callee_eff arg_eff) app_eff }
         | _ -> failwith "unreachable: callee focalization returned non-function")
     | Ast.If _ -> (* TODO: Unification? *)
@@ -730,7 +730,8 @@ and subtype pos (occ : bool) env (typ : FcType.typ) (super : FcType.typ) : coerc
             | None -> Cf (fun v -> v))
         | (Int, Int) | (Bool, Bool) -> Cf (fun v -> v)
         | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in subtype_whnf"
-        | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf" in
+        | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
+        | _ -> raise (TypeError (pos, SubType (typ, super))) in
     let (typ, co) = whnf pos env typ in
     let (super, co') = whnf pos env super in
     let Cf coerce = subtype_whnf typ super in
