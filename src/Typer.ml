@@ -616,7 +616,7 @@ and articulate pos = function
     | _ -> failwith "unreachable: `articulate` on non-uv"
 
 and articulate_template pos = function
-    | Uv uv as uv_typ -> fun template ->
+    | Uv uv -> fun template ->
         (match uv with
         | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
         | {contents = Unassigned (_, level)} ->
@@ -664,7 +664,7 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
         let (typ, super) = resolve pos env typ super_locator super in
         let Cf coerce = subtype pos occ env typ super in
 
-        let axioms = Vector1.map (fun (axname, (((_, kind) as binding, _) as param), impl) ->
+        let axioms = Vector1.map (fun (axname, ((_, kind) as binding, _), impl) ->
             let rec axiomatize l r = function
                 | ArrowK (domain, codomain) ->
                     let def = (Name.fresh (), domain) in
