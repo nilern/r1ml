@@ -35,8 +35,8 @@ type error =
 exception TypeError of span * error
 
 let type_error_to_doc (({pos_fname; _}, _) as span : Ast.span) err =
-    PPrint.string "Type error in" ^/^ PPrint.string pos_fname ^/^ PPrint.string "at"
-        ^/^ PPrint.string (Ast.span_to_string span) ^/^ PPrint.colon ^/^
+    PPrint.prefix 4 1 (PPrint.string "Type error in" ^/^ PPrint.string pos_fname ^/^ PPrint.string "at"
+        ^/^ PPrint.string (Ast.span_to_string span) ^/^ PPrint.colon)
     (match err with
     | Unbound name -> PPrint.string "unbound name" ^/^ Name.to_doc name
     | MissingField (typ, label) -> FcType.to_doc typ ^/^ PPrint.string "is missing field" ^/^ PPrint.string label
@@ -464,7 +464,7 @@ and whnf pos env typ : FcType.typ * coercion option =
 
     and apply : typ -> typ -> typ * coercion option = fun callee arg ->
         match callee with
-        (* FIXME: | Fn (param, body) -> eval (substitute (Name.Map.singleton param arg) body) *)
+        | Fn (param, body) -> eval (substitute_any (Name.Map.singleton param arg) body)
         | Ov _ | App _ -> (FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with
@@ -846,7 +846,8 @@ and check_uv_assignee pos uv level typ =
             if level' <= level
             then ()
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)
-        | Fn (_, body) -> check_uv_assignee pos uv level body
+        | Fn (param, body) -> ()
+            (* FIXME: check_uv_assignee pos uv level body *)
         | Pi ([], domain_locator, domain, _, codomain) ->
             check_uv_assignee pos uv level domain;
             check_uv_assignee_abs pos uv level codomain

@@ -75,5 +75,6 @@ val sibling : uv -> uv
 
 val substitute_abs : path Name.Map.t -> abs -> abs
 val substitute : path Name.Map.t -> t -> t
+val substitute_any : t Name.Map.t -> t -> t
 val substitute_locator : path Name.Map.t -> locator -> locator
 

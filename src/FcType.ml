@@ -252,3 +252,35 @@ and substitute_path substitution = function
         | None -> path)
     | UvP _ as path -> path
 
+let rec substitute_any_abs substitution (params, locator, body) =
+    let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+    let substitution =
+        List.fold_left2 (fun substitution (name, _) param' ->
+                            Name.Map.add name (Use param') substitution)
+                        substitution params params' in
+    (params', locator, substitute_any substitution body)
+
+and substitute_any substitution = function
+    | Pi (params, locator, domain, eff, codomain) ->
+        let params' = List.map (fun (name, kind) -> (Name.freshen name, kind)) params in
+        let substitution =
+            List.fold_left2 (fun substitution (name, _) param' ->
+                                Name.Map.add name (Use param') substitution)
+                            substitution params params' in
+        Pi (params', locator, substitute_any substitution domain, eff, substitute_any_abs substitution codomain)
+    | Record fields ->
+        Record (List.map (fun {label; typ} -> {label; typ = substitute_any substitution typ}) fields)
+    | Fn (param, body) ->
+        (* NOTE: Here we intentionally permit introduced reference capture but still implement
+                 shadowing by using Map.remove instead of Name.freshen + Map.add: *)
+        let substitution = Name.Map.remove param substitution in
+        Fn (param, substitute_any substitution body)
+    | App (callee, arg) -> App (substitute_any substitution callee, substitute_any substitution arg)
+    | Type typ -> Type (substitute_any_abs substitution typ)
+    | (Use (name, _) | Ov ((name, _), _)) as typ ->
+        (match Name.Map.find_opt name substitution with
+        | Some typ -> typ
+        | None -> typ)
+    | Uv {contents = Assigned typ} -> substitute_any substitution typ
+    | (Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
+
