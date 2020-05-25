@@ -477,43 +477,46 @@ and kindcheck env (typ : Ast.typ with_pos) =
         | None -> NoE typ
     )
 
-and whnf pos env typ : FcType.typ * coercion option =
-    let rec eval : FcType.typ -> FcType.typ * coercion option = function
+(* TODO: boolean flags considered harmful *)
+and whnf pos env typ : bool * FcType.typ * coercion option =
+    let rec eval : FcType.typ -> bool * FcType.typ * coercion option = function
         | App (callee, arg) ->
-            let (callee, callee_co) = eval callee in
-            let (typ, co) = apply callee arg in
-            ( typ
+            let (decidable, callee, callee_co) = eval callee in
+            let (decidable', typ, co) = apply callee arg in
+            ( decidable && decidable'
+            , typ
             , match (callee_co, co) with
               | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, arg)))
               | (Some callee_co, None) -> Some (Inst (callee_co, arg))
               | (None, Some co) -> Some co
               | (None, None) -> None )
-        | Fn _ as typ -> (typ, None)
+        | Fn _ as typ -> (true, typ, None)
         | Ov ov as typ ->
             (match Env.get_implementation env ov with
             | Some (axname, _, uv) ->
                 let typ = Uv uv in
-                let (typ, co) = eval typ in
-                ( typ
+                let (decidable, typ, co) = eval typ in
+                ( decidable
+                , typ
                 , match co with
                   | Some co -> Some (Trans (AUse axname, co))
                   | None -> Some (AUse axname) )
-            | None -> (typ, None))
+            | None -> (true, typ, None))
         | Uv uv as typ ->
             (match !uv with
             | Assigned typ -> eval typ
-            | Unassigned _ -> (typ, None))
-        | (Pi _ | IPi _ | Record _ | Type _ | Int | Bool) as typ -> (typ, None)
+            | Unassigned _ -> (true, typ, None))
+        | (Pi _ | IPi _ | Record _ | Type _ | Int | Bool) as typ -> (true, typ, None)
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
-    and apply : typ -> typ -> typ * coercion option = fun callee arg ->
+    and apply : typ -> typ -> bool * typ * coercion option = fun callee arg ->
         match callee with
         | Fn (param, body) -> eval (substitute_any (Name.Map.singleton param arg) body)
-        | Ov _ | App _ -> (FcType.App (callee, arg), None)
+        | Ov _ | App _ -> (true, FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with
             | Assigned callee -> apply callee arg
-            | Unassigned _ -> (FcType.App (callee, arg), None))
+            | Unassigned _ -> (false, FcType.App (callee, arg), None))
         | Pi _ | Record _ | Type _ | Int | Bool | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
     in eval typ
@@ -805,16 +808,18 @@ and subtype pos occ env typ locator super : coercer matching =
                 Cf (fun v -> {pos; v = Letrec (Vector1.singleton (pos, selectee, v), {pos; v = Record fields})})
             ; residual }
 
-        | (Type carrie, Type carrie') -> (* TODO: Use unification (?) *)
+        | (Type carrie, Type carrie') ->
             (match locator with
             | TypeL path ->
                 (match carrie with
                 | NoE impl ->
-                    let (impl, _) = whnf pos env impl in
-                    resolve_path impl path;
-                    {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
+                    let (decidable, impl, _) = whnf pos env impl in
+                    if decidable then begin
+                        resolve_path impl path;
+                        {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
+                    end else failwith "todo"
                 | Exists _ -> raise (TypeError (pos, Polytype carrie)))
-            | Hole ->
+            | Hole -> (* TODO: Use unification (?) *)
                 let {coercion = _; residual} = subtype_abs pos occ env carrie Hole carrie' in
                 let {coercion = _; residual = residual'} = subtype_abs pos occ env carrie Hole carrie' in
                 { coercion = Cf (fun _ -> {v = Proxy carrie'; pos})
@@ -835,36 +840,40 @@ and subtype pos occ env typ locator super : coercer matching =
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
         | _ -> raise (TypeError (pos, SubType (typ, super))) in
 
-    let (typ, co) = whnf pos env typ in
-    let (super, co') = whnf pos env super in
-    let {coercion = Cf coerce; residual} = subtype_whnf typ locator super in
-    { coercion =
-        (match (co, co') with
-        | (Some co, Some co') ->
-            Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
-        | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
-        | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
-        | (None, None) -> Cf coerce)
-    ; residual }
+    let (decidable, typ, co) = whnf pos env typ in
+    let (decidable', super, co') = whnf pos env super in
+    if decidable && decidable' then begin
+        let {coercion = Cf coerce; residual} = subtype_whnf typ locator super in
+        { coercion =
+            (match (co, co') with
+            | (Some co, Some co') ->
+                Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
+            | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
+            | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
+            | (None, None) -> Cf coerce)
+        ; residual }
+    end else failwith "todo"
 
 and unify_abs pos env typ typ' : coercion option matching = match (typ, typ') with
     | (NoE typ, NoE typ') -> unify pos env typ typ'
 
 and unify pos env typ typ' : coercion option matching =
-    let (typ, co) = whnf pos env typ in
-    let (typ', co'') = whnf pos env typ' in
-    let {coercion = co'; residual} = unify_whnf pos env typ typ' in
-    { coercion =
-        (match (co, co', co'') with
-        | (Some co, Some co', Some co'') -> Some (Trans (Trans (co, co'), Symm co''))
-        | (Some co, Some co', None) -> Some (Trans (co, co'))
-        | (Some co, None, Some co'') -> Some (Trans (co, Symm co''))
-        | (Some co, None, None) -> Some co
-        | (None, Some co', Some co'') -> Some (Trans (co', Symm co''))
-        | (None, Some co', None) -> Some co'
-        | (None, None, Some co'') -> Some (Symm co'')
-        | (None, None, None) -> None)
-    ; residual }
+    let (decidable, typ, co) = whnf pos env typ in
+    let (decidable', typ', co'') = whnf pos env typ' in
+    if decidable && decidable' then begin
+        let {coercion = co'; residual} = unify_whnf pos env typ typ' in
+        { coercion =
+            (match (co, co', co'') with
+            | (Some co, Some co', Some co'') -> Some (Trans (Trans (co, co'), Symm co''))
+            | (Some co, Some co', None) -> Some (Trans (co, co'))
+            | (Some co, None, Some co'') -> Some (Trans (co, Symm co''))
+            | (Some co, None, None) -> Some co
+            | (None, Some co', Some co'') -> Some (Trans (co', Symm co''))
+            | (None, Some co', None) -> Some co'
+            | (None, None, Some co'') -> Some (Symm co'')
+            | (None, None, None) -> None)
+        ; residual }
+    end else failwith "todo"
 
 and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     let open ResidualMonoid in
