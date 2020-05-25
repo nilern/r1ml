@@ -47,6 +47,12 @@ and path =
     | UvP of uv
     | UseP of binding
 
+and 'e residual =
+    | Sub of abs * abs * 'e ref
+    | Unify of abs * abs * 'e ref
+    | Residuals of 'e residual * 'e residual
+    | Skolems of binding Vector1.t * 'e residual
+
 and coercion =
     | Refl of typ
     | Symm of coercion
@@ -61,6 +67,12 @@ and template = locator
 
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
+
+module Residual (E : sig type t end) = struct
+    type t = E.t residual
+
+    let combine r r' = Residuals (r, r')
+end
 
 let rec kind_to_doc = function
     | ArrowK (domain, codomain) ->
