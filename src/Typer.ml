@@ -1,6 +1,7 @@
 let (^/^) = PPrint.(^/^)
 
 open FcType
+open Effect
 open FcTerm
 
 type abs = FcType.abs
@@ -8,10 +9,10 @@ type typ = FcType.t
 type locator = FcType.locator
 type ov = FcType.ov
 type uv = FcType.uv
-type effect = Ast.effect
+type effect = FcType.Effect.t
 type 'a with_pos = 'a Ast.with_pos
 
-type 'a typing = {term : 'a; typ : FcType.typ; eff : Ast.effect}
+type 'a typing = {term : 'a; typ : FcType.typ; eff : effect}
 
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
 (* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
@@ -36,7 +37,7 @@ type error =
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
-    | ImpureType of Ast.expr
+    | ImpureType of Ast.Term.expr
     | Escape of ov
     | Occurs of uv * typ
     | Polytype of abs
@@ -52,10 +53,10 @@ let type_error_to_doc (({pos_fname; _}, _) as span : Ast.span) err =
     (match err with
     | Unbound name -> PPrint.string "unbound name" ^/^ Name.to_doc name
     | MissingField (typ, label) -> FcType.to_doc typ ^/^ PPrint.string "is missing field" ^/^ PPrint.string label
-    | SubEffect (eff, eff') -> Ast.effect_to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.effect_to_doc eff'
+    | SubEffect (eff, eff') -> Ast.Effect.to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.Effect.to_doc eff'
     | SubType (typ, super) -> FcType.to_doc typ ^/^ PPrint.string "is not a subtype of" ^/^ FcType.to_doc super
     | Unify (typ, typ') -> FcType.to_doc typ ^/^ PPrint.string "does no unify with" ^/^ FcType.to_doc typ'
-    | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.expr_to_doc expr
+    | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.Term.expr_to_doc expr
     | Escape ((name, _), _) -> Name.to_doc name ^/^ PPrint.string "would escape"
     | Occurs (uv, typ) -> FcType.to_doc (Uv uv) ^/^ PPrint.string "occurs in" ^/^ FcType.to_doc typ
     | Polytype typ -> FcType.abs_to_doc typ ^/^ PPrint.string "is not a monotype"
@@ -67,12 +68,12 @@ let type_error_to_doc (({pos_fname; _}, _) as span : Ast.span) err =
 
 module Env = struct
     type val_binder =
-        | WhiteDecl of Ast.decl
-        | GreyDecl of Ast.decl
+        | WhiteDecl of Ast.Type.decl
+        | GreyDecl of Ast.Type.decl
         | BlackDecl of lvalue * locator
-        | WhiteDef of Ast.lvalue * Ast.expr with_pos
-        | GreyDef of Ast.lvalue * Ast.expr with_pos
-        | BlackAnn of lvalue * Ast.expr with_pos * ov Vector.t * locator * coercion option
+        | WhiteDef of Ast.Term.lvalue * Ast.Term.expr with_pos
+        | GreyDef of Ast.Term.lvalue * Ast.Term.expr with_pos
+        | BlackAnn of lvalue * Ast.Term.expr with_pos * ov Vector.t * locator * coercion option
         | BlackUnn of lvalue * expr with_pos * effect
 
     type scope
@@ -182,13 +183,13 @@ module Env = struct
         {env with scopes = Fn (ref (BlackDecl (binding, locator))) :: env.scopes}
 
     let push_sig env bindings =
-        let bindings = Vector.fold_left (fun bindings ({Ast.name; _} as binding) ->
+        let bindings = Vector.fold_left (fun bindings ({name; _} as binding : Ast.Type.decl) ->
             Name.Map.add name (ref (WhiteDecl binding)) bindings
         ) Name.Map.empty bindings in
         {env with scopes = Sig bindings :: env.scopes}
 
     let push_struct env bindings =
-        let bindings = Vector.fold_left (fun bindings ({Ast.pat = name; _} as binding, expr) ->
+        let bindings = Vector.fold_left (fun bindings ({Ast.Term.pat = name; _} as binding, expr) ->
             Name.Map.add name (ref (WhiteDef (binding, expr))) bindings
         ) Name.Map.empty bindings in
         {env with scopes = Struct bindings :: env.scopes}
@@ -247,13 +248,13 @@ let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
 (* # Effects *)
 
 let join_effs eff eff' = match (eff, eff') with
-    | (Ast.Pure, Ast.Pure) -> Ast.Pure
+    | (Pure, Pure) -> Pure
     | _ -> Impure
 
 (* # Expressions *)
 
-let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
-    | Ast.Fn ({pat = name; ann}, body) ->
+let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
+    | Ast.Term.Fn ({pat = name; ann}, body) ->
         let ann = match ann with
             | Some ann -> ann
             | None -> failwith "todo" in
@@ -276,7 +277,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             )
         )
 
-    | Ast.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
+    | Ast.Term.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let callee = {name = Name.fresh (); typ = callee_typ} in
         (match focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
@@ -307,17 +308,17 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             | NoE codomain -> {term; typ = codomain; eff})
         | _ -> failwith "unreachable: callee focalization returned non-function")
 
-    | Ast.If _ -> check env (NoE (Uv (Env.uv env (Name.fresh ())))) expr (* TODO: Unification? *)
+    | Ast.Term.If _ -> check env (NoE (Uv (Env.uv env (Name.fresh ())))) expr (* TODO: Unification? *)
 
-    | Ast.Seal (expr, typ) ->
+    | Ast.Term.Seal (expr, typ) ->
         let typ = kindcheck env typ in
         let res = check env typ expr in
         let gen_eff = match typ with
-            | Exists _ -> Ast.Impure
-            | NoE _ -> Ast.Pure in
+            | Exists _ -> Impure
+            | NoE _ -> Pure in
         {res with eff = join_effs res.eff gen_eff}
 
-    | Ast.Struct defs ->
+    | Ast.Term.Struct defs ->
         let bindings = Vector.map (fun (_, lvalue, expr) -> (lvalue, expr)) defs in
         let env = Env.push_struct env bindings in
         let (defs, fields, field_typs, eff) = field_types env defs in
@@ -325,7 +326,7 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
         ; typ = FcType.Record field_typs
         ; eff }
 
-    | Ast.Select (record, label) ->
+    | Ast.Term.Select (record, label) ->
         let {term = record; typ = record_typ; eff} = typeof env record in
         let label = Name.to_string label in
         let shape = FcType.RecordL (Vector.singleton {label; typ = Hole}) in
@@ -338,15 +339,15 @@ let rec typeof env (expr : Ast.expr with_pos) = match expr.v with
             ; typ; eff}
         | _ -> failwith "unreachable: selectee focalization returned non-record")
 
-    | Ast.Proxy typ ->
+    | Ast.Term.Proxy typ ->
         let typ = kindcheck env typ in
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
 
-    | Ast.Use name ->
+    | Ast.Term.Use name ->
         let (_, ({name = _; typ} as def)) = lookup expr.pos env name in
         {term = {expr with v = Use def}; typ; eff = Pure}
 
-    | Ast.Const c ->
+    | Ast.Term.Const c ->
         let typ = match c with
             | Const.Int _ -> Int
             | Const.Bool _ -> Bool in
@@ -363,12 +364,12 @@ and field_types env fields =
     ) ([], [], [], Pure) fields in
     (Vector.of_list (List.rev defs), Vector.of_list (List.rev fields), Vector.of_list (List.rev typs), eff)
 
-and check env (typ : abs) (expr : Ast.expr with_pos) =
+and check env (typ : abs) (expr : Ast.Term.expr with_pos) =
     implement env (reabstract env typ) expr
 
-and implement env ((_, _, body) as typ) (expr : Ast.expr with_pos) =
+and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
     match expr.v with
-    | Ast.If (cond, conseq, alt) ->
+    | Ast.Term.If (cond, conseq, alt) ->
         let {term = cond; eff = cond_eff} = check env (NoE Bool) cond in
         let {term = conseq; eff = conseq_eff} = implement env typ conseq in
         let {term = alt; eff = alt_eff} = implement env typ alt in
@@ -385,7 +386,7 @@ and implement env ((_, _, body) as typ) (expr : Ast.expr with_pos) =
 
 (* # Definitions and Statements *)
 
-and deftype env (pos, {Ast.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
+and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup pos env name in
     match Env.get pos env name with
     | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) -> (* FIXME: use coercion *)
@@ -407,10 +408,10 @@ and reabstract env : abs -> ov Vector.t * locator * typ = function
         (Vector1.to_vector params', substitute_locator substitution locator, substitute substitution body)
     | NoE typ -> (Vector.of_list [], Hole, typ)
 
-and kindcheck env (typ : Ast.typ with_pos) =
-    let rec elaborate env (typ : Ast.typ with_pos) =
+and kindcheck env (typ : Ast.Type.t with_pos) =
+    let rec elaborate env (typ : Ast.Type.t with_pos) =
         match typ.v with
-        | Ast.Pi ({name; typ = domain}, eff, codomain) ->
+        | Ast.Type.Pi ({name; typ = domain}, eff, codomain) ->
             let domain = kindcheck env domain in
             Env.skolemizing_domain env domain (fun env (universals, domain_locator, domain) ->
                 let name = match name with
@@ -442,11 +443,11 @@ and kindcheck env (typ : Ast.typ with_pos) =
                     ( PiL (universals, eff, Hole)
                     , Pi (universals, domain_locator, domain, eff, codomain) )
             )
-        | Ast.Sig decls ->
+        | Ast.Type.Sig decls ->
             let env = Env.push_sig env decls in
             let (locators, decls) = Vector.split (Vector.map (elaborate_decl env) decls) in
             (RecordL locators, Record decls)
-        | Ast.Path expr ->
+        | Ast.Type.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
                 (match focalize typ.pos env proxy_typ (TypeL (UseP (Name.fresh (), TypeK))) with
@@ -455,15 +456,15 @@ and kindcheck env (typ : Ast.typ with_pos) =
                     (locator, typ)
                 | _ -> failwith "unreachable")
             | _ -> raise (TypeError (typ.pos, ImpureType expr)))
-        | Ast.Singleton expr ->
+        | Ast.Type.Singleton expr ->
             (match typeof env expr with
             | {term = _; typ; eff = Pure} -> (Hole, typ)
             | _ -> raise (TypeError (typ.pos, ImpureType expr.v)))
-        | Ast.Type ->
+        | Ast.Type.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
             (TypeL (OvP ov), Type (NoE (Ov ov)))
-        | Ast.Int -> (Hole, Int)
-        | Ast.Bool -> (Hole, Bool)
+        | Ast.Type.Int -> (Hole, Int)
+        | Ast.Type.Bool -> (Hole, Bool)
 
     and elaborate_decl env {name; typ} =
         let (locator, {name; typ}) = lookup typ.pos env name in
@@ -657,10 +658,10 @@ and focalize pos env typ (template : FcType.template) = match (typ, template) wi
 (* # Subtyping *)
 
 and sub_eff pos eff eff' = match (eff, eff') with
-    | (Ast.Pure, Ast.Pure) -> ()
-    | (Ast.Pure, Ast.Impure) -> ()
-    | (Ast.Impure, Ast.Pure) -> raise (TypeError (pos, SubEffect (eff, eff')))
-    | (Ast.Impure, Ast.Impure) -> ()
+    | (Pure, Pure) -> ()
+    | (Pure, Impure) -> ()
+    | (Impure, Pure) -> raise (TypeError (pos, SubEffect (eff, eff')))
+    | (Impure, Impure) -> ()
 
 and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locator, super) : ov Vector.t * locator * typ) =
     match Vector1.of_vector existentials with
@@ -958,13 +959,13 @@ and check_uv_assignee pos uv level typ =
 
 (* # REPL support *)
 
-let check_interaction env : Ast.stmt -> stmt typing = function
-    | Ast.Def ((_, ({pat = name; _} as lvalue), expr) as def) ->
+let check_interaction env : Ast.Term.stmt -> stmt typing = function
+    | Ast.Term.Def ((_, ({pat = name; _} as lvalue), expr) as def) ->
         let env = Env.push_struct env (Vector.singleton (lvalue, expr)) in
         let {term; typ; eff} = deftype env def in
         Env.repl_define env {name; typ};
         {term = Def term; typ; eff}
-    | Ast.Expr expr ->
+    | Ast.Term.Expr expr ->
         let {term; typ; eff} = typeof env expr in
         {term = Expr term; typ; eff}
 

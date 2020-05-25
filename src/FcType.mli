@@ -1,8 +1,8 @@
+module Effect = Ast.Effect
+
 type kind
     = ArrowK of kind * kind
     | TypeK
-
-type effect = Ast.effect
 
 (* The level of a type variable is the number of skolem-binding scopes in the
    typing environment at its creation site. Kind of like syntactic closures, but
@@ -26,8 +26,8 @@ and abs =
     | NoE of t
 
 and t =
-    | Pi of binding Vector.t * locator * t * effect * abs
-    | IPi of t Vector.t * t * effect * abs
+    | Pi of binding Vector.t * locator * t * Effect.t * abs
+    | IPi of t Vector.t * t * Effect.t * abs
     | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
@@ -39,7 +39,7 @@ and t =
     | Bool
 
 and locator =
-    | PiL of binding Vector.t * effect * locator
+    | PiL of binding Vector.t * Effect.t * locator
     | RecordL of locator field Vector.t
     | TypeL of path
     | Hole

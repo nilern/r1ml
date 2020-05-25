@@ -1,8 +1,10 @@
+module Effect = Ast.Effect
+
 type kind
     = ArrowK of kind * kind
     | TypeK
 
-type effect = Ast.effect
+type effect = Effect.t
 
 type level = int
 
@@ -97,9 +99,9 @@ and to_doc = function
         then PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc (Vector.to_list universals)))
                  (PPrint.dot ^^ PPrint.blank 1
                   ^^ PPrint.prefix 4 1 (PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc domain))
-                         (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
+                         (Ast.Effect.arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain))
         else PPrint.prefix 4 1 (domain_to_doc domain) 
-                 (Ast.effect_arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
+                 (Ast.Effect.arrow eff ^^ PPrint.blank 1 ^^ abs_to_doc codomain)
     | Record fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
@@ -147,7 +149,7 @@ and field_to_doc {label; typ} =
 and locator_to_doc = function
     | PiL (bindings, eff, codomain) ->
         universal_to_doc bindings
-            (PPrint.infix 4 1 (Ast.effect_arrow eff) PPrint.underscore (locator_to_doc codomain))
+            (PPrint.infix 4 1 (Ast.Effect.arrow eff) PPrint.underscore (locator_to_doc codomain))
     | RecordL fields ->
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace

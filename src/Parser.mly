@@ -1,5 +1,8 @@
 %{
 open Ast
+open Term
+open Type
+open Effect
 
 let unpath typ =
     {typ with v = match typ.v with
@@ -17,7 +20,7 @@ let unpath typ =
 %token <string> ID
 %token <Const.t> CONST
 
-%start <Ast.stmt list> stmts
+%start <Ast.Term.stmt list> stmts
 
 %%
 
