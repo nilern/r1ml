@@ -71,7 +71,7 @@ and coercion =
 and typ = t
 and template = locator
 
-module Residual : functor (E : sig type t end) -> Semigroup.S with type t = E.t residual
+module Residual : functor (E : sig type t end) -> Semigroup.S with type t = E.t residual (* HACK *)
 
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
