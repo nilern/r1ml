@@ -12,58 +12,14 @@ type uv = FcType.uv
 type effect = FcType.Effect.t
 type 'a with_pos = 'a Ast.with_pos
 
+exception TypeError = TypeError.TypeError
+
 type 'a typing = {term : 'a; typ : FcType.typ; eff : effect}
 
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
 (* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (expr with_pos -> expr with_pos)
-
-type error =
-    | Unbound of Name.t
-    | MissingField of typ * string
-    | SubEffect of effect * effect
-    | SubType of typ * typ
-    | Unify of typ * typ
-    | Unsolvable of expr with_pos residual
-    | ImpureType of Ast.Term.expr
-    | Escape of ov
-    | Occurs of uv * typ
-    | Polytype of abs
-    | PolytypeInference of abs
-    | RecordArticulation of typ
-    | RecordArticulationL of locator
-
-exception TypeError of span * error
-
-let rec cause_to_doc = function
-    | Unbound name -> PPrint.string "unbound name" ^/^ Name.to_doc name
-    | MissingField (typ, label) -> FcType.to_doc typ ^/^ PPrint.string "is missing field" ^/^ PPrint.string label
-    | SubEffect (eff, eff') -> Ast.Effect.to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.Effect.to_doc eff'
-    | SubType (typ, super) -> FcType.to_doc typ ^/^ PPrint.string "is not a subtype of" ^/^ FcType.to_doc super
-    | Unify (typ, typ') -> FcType.to_doc typ ^/^ PPrint.string "does no unify with" ^/^ FcType.to_doc typ'
-    | Unsolvable residual ->
-        let rec to_doc = function
-            | Axioms (_, residual) | Skolems (_, residual) -> to_doc residual
-            | Residuals (residual, residual') ->
-                to_doc residual ^/^ PPrint.string "and" ^/^ to_doc residual'
-            | Sub (_, typ, _, super, _) -> cause_to_doc (SubType (typ, super))
-            | Unify (typ, typ', _) -> cause_to_doc (Unify (typ, typ'))
-        in to_doc residual
-    | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.Term.expr_to_doc expr
-    | Escape ((name, _), _) -> Name.to_doc name ^/^ PPrint.string "would escape"
-    | Occurs (uv, typ) -> FcType.to_doc (Uv uv) ^/^ PPrint.string "occurs in" ^/^ FcType.to_doc typ
-    | Polytype typ -> FcType.abs_to_doc typ ^/^ PPrint.string "is not a monotype"
-    | PolytypeInference typ -> PPrint.string "tried to infer polytype" ^/^ FcType.abs_to_doc typ
-    | RecordArticulation typ ->
-        PPrint.string "tried to articulate record type" ^/^ FcType.to_doc typ
-    | RecordArticulationL typ ->
-        PPrint.string "tried to articulate record type" ^/^ FcType.locator_to_doc typ
-
-let type_error_to_doc (({pos_fname; _}, _) as span : Ast.span) err =
-    PPrint.prefix 4 1 (PPrint.string "Type error in" ^/^ PPrint.string pos_fname ^/^ PPrint.string "at"
-        ^/^ PPrint.string (Ast.span_to_string span) ^/^ PPrint.colon)
-        (cause_to_doc err)
 
 module Env = struct
     type val_binder =
@@ -100,14 +56,11 @@ module Env = struct
             | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
         in define env.scopes
 
-    let with_incremented_level ({current_level; _} as env) body =
-        body {env with current_level = current_level + 1}
-
-    let with_existential ({scopes; current_level} as env) f =
-        with_incremented_level env (fun ({current_level; _} as env) ->
-            let bindings = ref [] in
-            f {env with scopes = Existential (bindings, current_level) :: scopes} bindings
-        )
+    let push_existential ({scopes; current_level} as env) =
+        let bindings = ref [] in
+        let current_level = current_level + 1 in
+        ( {scopes = Existential (bindings, current_level) :: scopes; current_level}
+        , bindings )
 
     let generate env binding =
         let rec generate = function
@@ -118,61 +71,46 @@ module Env = struct
             | [] -> failwith "Typer.Env.generate: missing root Existential scope"
         in generate env.scopes
 
-    let skolemizing_domain ({scopes; current_level} as env) domain f = match domain with
+    let push_domain_skolems ({scopes; current_level} as env) = function
         | Exists (existentials, locator, domain) ->
-            with_incremented_level env (fun ({current_level = level; _} as env) ->
-                let skolems = Vector.map (fun binding -> (binding, level)) (Vector1.to_vector existentials) in
-                let substitution = Vector.fold_left (fun substitution (((name, _), _) as skolem) ->
-                    Name.Map.add name (OvP skolem) substitution
-                ) Name.Map.empty skolems in
-                f {env with scopes = Universal skolems :: scopes}
-                  (skolems, substitute_locator substitution locator, substitute substitution domain)
-            )
-        | NoE domain -> f env (Vector.of_list [], Hole, domain)
-
-    let skolemizing_abs ({scopes; current_level} as env) (existentials, locator, body) f =
-        with_incremented_level env (fun ({current_level = level; _} as env) ->
-            let existentials' = Vector1.map FcType.freshen existentials in
-            let skolems = Vector1.map (fun binding -> (binding, level)) existentials' in
-            let substitution = Vector1.fold_left (fun substitution (((name, _), _) as skolem) ->
+            let level = current_level + 1 in
+            let skolems = Vector.map (fun binding -> (binding, level)) (Vector1.to_vector existentials) in
+            let substitution = Vector.fold_left (fun substitution (((name, _), _) as skolem) ->
                 Name.Map.add name (OvP skolem) substitution
             ) Name.Map.empty skolems in
-            f {env with scopes = Existential (ref (Vector1.to_list existentials'), level) :: scopes}
-              (existentials', substitute_locator substitution locator, substitute substitution body)
-        )
+            ( {scopes = Universal skolems :: scopes; current_level = level}
+            , skolems, substitute_locator substitution locator, substitute substitution domain )
+        | NoE domain -> (env, Vector.of_list [], Hole, domain)
 
-    let skolemizing_arrow ({scopes; current_level} as env) (universals, domain, eff, codomain) f =
-        with_incremented_level env (fun ({current_level = level; _} as env) ->
-            let universals' = Vector.map FcType.freshen universals in
-            let skolems = Vector.map (fun binding -> (binding, level)) universals' in
-            let substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (OvP skolem) substitution
-            ) Name.Map.empty universals skolems in
-            f {env with scopes = Universal skolems :: scopes}
-              (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
-        )
+    let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
+        let level = current_level + 1 in
+        let existentials' = Vector1.map FcType.freshen existentials in
+        let skolems = Vector1.map (fun binding -> (binding, level)) existentials' in
+        let substitution = Vector1.fold_left (fun substitution (((name, _), _) as skolem) ->
+            Name.Map.add name (OvP skolem) substitution
+        ) Name.Map.empty skolems in
+        ( {scopes = Existential (ref (Vector1.to_list existentials'), level) :: scopes; current_level = level}
+        , existentials', substitute_locator substitution locator, substitute substitution body )
 
-    let skolemizing_located_arrow ({scopes; current_level} as env)
-            (locator_universals, codomain_locator) (universals, domain, eff, codomain) f =
-        with_incremented_level env (fun ({current_level = level; _} as env) ->
-            let universals' = Vector.map FcType.freshen universals in
-            let skolems = Vector.map (fun binding -> (binding, level)) universals' in
-            let substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (OvP skolem) substitution
-            ) Name.Map.empty universals skolems in
-            let locator_substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
-                Name.Map.add name (OvP skolem) substitution
-            ) Name.Map.empty locator_universals skolems in
-            f {env with scopes = Universal skolems :: scopes}
-              (universals', substitute_locator locator_substitution codomain_locator)
-              (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
-        )
+    let push_arrow_skolems {scopes; current_level} (locator_universals, codomain_locator)
+            (universals, domain, eff, codomain) =
+        let level = current_level + 1 in
+        let universals' = Vector.map FcType.freshen universals in
+        let skolems = Vector.map (fun binding -> (binding, level)) universals' in
+        let substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
+            Name.Map.add name (OvP skolem) substitution
+        ) Name.Map.empty universals skolems in
+        let locator_substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
+            Name.Map.add name (OvP skolem) substitution
+        ) Name.Map.empty locator_universals skolems in
+        ( {scopes = Universal skolems :: scopes; current_level = level}
+        , (universals', substitute_locator locator_substitution codomain_locator)
+        , (universals', substitute substitution domain, eff, substitute_abs substitution codomain) )
 
-    let preskolemized ({scopes; current_level} as env) bindings f =
-        with_incremented_level env (fun ({current_level = level; _} as env) ->
-            let skolems = Vector.map (fun binding -> (binding, level)) bindings in
-            f {env with scopes = Universal skolems :: scopes}
-        )
+    let push_skolems {scopes; current_level} bindings =
+        let level = current_level + 1 in
+        let skolems = Vector.map (fun binding -> (binding, level)) (Vector1.to_vector bindings) in
+        {scopes = Universal skolems :: scopes; current_level = level}
 
     let uv {current_level = level; _} binding =
         ref (Unassigned (binding, level))
@@ -269,23 +207,21 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             | Some ann -> ann
             | None -> failwith "todo" in
         let domain = kindcheck env ann in
-        Env.skolemizing_domain env domain (fun env (universals, domain_locator, domain) ->
-            let env = Env.push_domain env {name; typ = domain} domain_locator in
-            Env.with_existential env (fun env existentials ->
-                let {term = body; typ = codomain; eff} = typeof env body in
+        let (env, universals, domain_locator, domain) = Env.push_domain_skolems env domain in
+        let env = Env.push_domain env {name; typ = domain} domain_locator in
+        let (env, existentials) = Env.push_existential env in
+        let {term = body; typ = codomain; eff} = typeof env body in
 
-                let universals = Vector.map fst universals in
-                let (body, codomain) = match Vector1.of_list (!existentials) with
-                    | Some existentials ->
-                        let uses = Vector1.map (fun binding -> FcType.Use binding) existentials in
-                        ( {body with Ast.v = LetType (existentials, {body with v = Pack (uses, body)})}
-                        , Exists (existentials, Hole, codomain) ) (* HACK: Hole *)
-                    | None -> (body, NoE codomain) in
-                { term = {expr with v = Fn (universals, {name; typ = domain}, body)}
-                ; typ = Pi (universals, domain_locator, domain, eff, codomain)
-                ; eff = Pure }
-            )
-        )
+        let universals = Vector.map fst universals in
+        let (body, codomain) = match Vector1.of_list (!existentials) with
+            | Some existentials ->
+                let uses = Vector1.map (fun binding -> FcType.Use binding) existentials in
+                ( {body with Ast.v = LetType (existentials, {body with v = Pack (uses, body)})}
+                , Exists (existentials, Hole, codomain) ) (* HACK: Hole *)
+            | None -> (body, NoE codomain) in
+        { term = {expr with v = Fn (universals, {name; typ = domain}, body)}
+        ; typ = Pi (universals, domain_locator, domain, eff, codomain)
+        ; eff = Pure }
 
     | Ast.Term.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
@@ -305,17 +241,16 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             let eff = join_effs (join_effs callee_eff arg_eff) app_eff in
             (match codomain with
             | Exists (existentials, codomain_locator, concr_codo) ->
-                Env.skolemizing_abs env (existentials, codomain_locator, concr_codo)
-                    (fun env (existentials, codomain_locator, concr_codo) ->
-                        let (_, _, res_typ) as typ = reabstract env codomain in
-                        let {coercion = Cf coerce; residual} = coercion expr.pos true env concr_codo typ in
-                        solve expr.pos env residual;
+                let (env, existentials, codomain_locator, concr_codo) =
+                    Env.push_abs_skolems env (existentials, codomain_locator, concr_codo) in
+                let (_, _, res_typ) as typ = reabstract env codomain in
+                let {coercion = Cf coerce; residual} = coercion expr.pos true env concr_codo typ in
+                solve expr.pos env residual;
 
-                        let def = {name = Name.fresh (); typ = concr_codo} in
-                        { term = {term with v = Unpack (existentials, def, term, coerce {expr with v = Use def})}
-                        ; typ = res_typ
-                        ; eff = Impure }
-                    )
+                let def = {name = Name.fresh (); typ = concr_codo} in
+                { term = {term with v = Unpack (existentials, def, term, coerce {expr with v = Use def})}
+                ; typ = res_typ
+                ; eff = Impure }
             | NoE codomain -> {term; typ = codomain; eff})
         | _ -> failwith "unreachable: callee focalization returned non-function")
 
@@ -425,40 +360,41 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
         match typ.v with
         | Ast.Type.Pi ({name; typ = domain}, eff, codomain) ->
             let domain = kindcheck env domain in
-            Env.skolemizing_domain env domain (fun env (universals, domain_locator, domain) ->
-                let name = match name with
-                    | Some name -> name
-                    | None -> Name.fresh () in
-                let env = Env.push_domain env {name; typ = domain} domain_locator in
+            let (env, universals, domain_locator, domain) = Env.push_domain_skolems env domain in
+            let name = match name with
+                | Some name -> name
+                | None -> Name.fresh () in
+            let env = Env.push_domain env {name; typ = domain} domain_locator in
 
-                let universals = Vector.map fst universals in
-                match (eff, kindcheck env codomain) with
-                | (Pure, Exists (existentials, codomain_locator, concr_codo)) ->
-                    let existentials' = existentials |> Vector1.map (fun (name, kind) ->
-                        ( Name.freshen name
-                        , Vector.fold_right (fun (_, arg_kind) kind -> ArrowK (arg_kind, kind))
-                                            universals kind )
-                    ) in
-                    let substitution = Vector1.fold_left2 (fun substitution (name, _) existential ->
-                        let path = Vector.fold_left (fun path arg ->
-                            AppP (path, UseP arg)
-                        ) (UseP existential) universals in
-                        Name.Map.add name path substitution
-                    ) Name.Map.empty existentials existentials' in
-                    let codomain =
-                        Exists ( existentials', substitute_locator substitution codomain_locator
-                               , substitute substitution concr_codo ) in
-                    let (_, codomain_locator, concr_codo) = reabstract env codomain in
-                    ( PiL (universals, eff, codomain_locator)
-                    , Pi (universals, domain_locator, domain, eff, (NoE concr_codo)) )
-                | (_, codomain) ->
-                    ( PiL (universals, eff, Hole)
-                    , Pi (universals, domain_locator, domain, eff, codomain) )
-            )
+            let universals = Vector.map fst universals in
+            (match (eff, kindcheck env codomain) with
+            | (Pure, Exists (existentials, codomain_locator, concr_codo)) ->
+                let existentials' = existentials |> Vector1.map (fun (name, kind) ->
+                    ( Name.freshen name
+                    , Vector.fold_right (fun (_, arg_kind) kind -> ArrowK (arg_kind, kind))
+                                        universals kind )
+                ) in
+                let substitution = Vector1.fold_left2 (fun substitution (name, _) existential ->
+                    let path = Vector.fold_left (fun path arg ->
+                        AppP (path, UseP arg)
+                    ) (UseP existential) universals in
+                    Name.Map.add name path substitution
+                ) Name.Map.empty existentials existentials' in
+                let codomain =
+                    Exists ( existentials', substitute_locator substitution codomain_locator
+                           , substitute substitution concr_codo ) in
+                let (_, codomain_locator, concr_codo) = reabstract env codomain in
+                ( PiL (universals, eff, codomain_locator)
+                , Pi (universals, domain_locator, domain, eff, (NoE concr_codo)) )
+            | (_, codomain) ->
+                ( PiL (universals, eff, Hole)
+                , Pi (universals, domain_locator, domain, eff, codomain) ))
+
         | Ast.Type.Sig decls ->
             let env = Env.push_sig env decls in
             let (locators, decls) = Vector.split (Vector.map (elaborate_decl env) decls) in
             (RecordL locators, Record decls)
+
         | Ast.Type.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
@@ -468,27 +404,29 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
                     (locator, typ)
                 | _ -> failwith "unreachable")
             | _ -> raise (TypeError (typ.pos, ImpureType expr)))
+
         | Ast.Type.Singleton expr ->
             (match typeof env expr with
             | {term = _; typ; eff = Pure} -> (Hole, typ)
             | _ -> raise (TypeError (typ.pos, ImpureType expr.v)))
+
         | Ast.Type.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
             (TypeL (OvP ov), Type (NoE (Ov ov)))
+
         | Ast.Type.Int -> (Hole, Int)
         | Ast.Type.Bool -> (Hole, Bool)
 
     and elaborate_decl env {name; typ} =
         let (locator, {name; typ}) = lookup typ.pos env name in
         let label = Name.to_string name in
-        ({label; typ = locator}, {label; typ})
-    in
-    Env.with_existential env (fun env params ->
-        let (locator, typ) = elaborate env typ in
-        match Vector1.of_list (!params) with
-        | Some params -> Exists (params, locator, typ)
-        | None -> NoE typ
-    )
+        ({label; typ = locator}, {label; typ}) in
+
+    let (env, params) = Env.push_existential env in
+    let (locator, typ) = elaborate env typ in
+    match Vector1.of_list (!params) with
+    | Some params -> Exists (params, locator, typ)
+    | None -> NoE typ
 
 (* TODO: boolean flags considered harmful *)
 and whnf pos env typ : bool * FcType.typ * coercion option =
@@ -705,29 +643,28 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
 
 and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching = match typ with
     | Exists (skolems, sub_locator, typ) ->
-        Env.skolemizing_abs env (skolems, sub_locator, typ)
-            (fun env (skolems, _, typ) ->
-                match super with
-                | Exists (existentials, super_locator, super) ->
-                    let (uvs, super_locator, super) =
-                        instantiate_abs env (existentials, super_locator, super) in
+        let (env, skolems, _, typ) = Env.push_abs_skolems env (skolems, sub_locator, typ) in
+        (match super with
+        | Exists (existentials, super_locator, super) ->
+            let (uvs, super_locator, super) =
+                instantiate_abs env (existentials, super_locator, super) in
 
-                    let {coercion = Cf coerce; residual} =
-                        subtype pos occ env typ super_locator super in
+            let {coercion = Cf coerce; residual} =
+                subtype pos occ env typ super_locator super in
 
-                    let impl = {name = Name.fresh (); typ} in
-                    let body = {Ast.pos; v = Pack ( Vector1.map (fun uv -> Uv uv) uvs
-                                                  , coerce {Ast.pos; v = Use impl} )} in
-                    { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
-                    ; residual = ResidualMonoid.skolemized skolems residual }
-                | NoE super ->
-                    let {coercion = Cf coerce; residual} = subtype pos occ env typ locator super in
+            let impl = {name = Name.fresh (); typ} in
+            let body = {Ast.pos; v = Pack ( Vector1.map (fun uv -> Uv uv) uvs
+                                          , coerce {Ast.pos; v = Use impl} )} in
+            { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
+            ; residual = ResidualMonoid.skolemized skolems residual }
+        | NoE super ->
+            let {coercion = Cf coerce; residual} = subtype pos occ env typ locator super in
 
-                    let impl = {name = Name.fresh (); typ} in
-                    let body = coerce {Ast.pos; v = Use impl} in
-                    { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
-                    ; residual = ResidualMonoid.skolemized skolems residual }
-            )
+            let impl = {name = Name.fresh (); typ} in
+            let body = coerce {Ast.pos; v = Use impl} in
+            { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
+            ; residual = ResidualMonoid.skolemized skolems residual })
+
     | NoE typ ->
         (match super with
         | Exists (existentials, super_locator, super) ->
@@ -778,29 +715,28 @@ and subtype pos occ env typ locator super : coercer matching =
                     (locator_universals, codomain_locator)
                 | Hole -> (Vector.of_list [], Hole)
                 | _ -> failwith "unreachable: function locator" in
-            Env.skolemizing_located_arrow env q_codomain_locator (universals', domain', eff', codomain')
-                (fun env (locator_universals, codomain_locator) (universals', domain', eff', codomain') ->
-                    let (uvs, domain_locator, domain, eff, codomain) =
-                        instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
+            let (env, (locator_universals, codomain_locator), (universals', domain', eff', codomain')) =
+                Env.push_arrow_skolems env q_codomain_locator (universals', domain', eff', codomain') in
+            let (uvs, domain_locator, domain, eff, codomain) =
+                instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 
-                    let {coercion = Cf coerce_domain; residual = domain_residual} =
-                        subtype pos occ env domain' domain_locator domain in
-                    sub_eff pos eff eff';
-                    let {coercion = Cf coerce_codomain; residual = codomain_residual} =
-                        subtype_abs pos occ env codomain codomain_locator codomain' in
+            let {coercion = Cf coerce_domain; residual = domain_residual} =
+                subtype pos occ env domain' domain_locator domain in
+            sub_eff pos eff eff';
+            let {coercion = Cf coerce_codomain; residual = codomain_residual} =
+                subtype_abs pos occ env codomain codomain_locator codomain' in
 
-                    let param = {name = Name.fresh (); typ = domain'} in
-                    let arg = coerce_domain {pos; v = Use param} in
-                    let arrows_residual = combine domain_residual codomain_residual in
-                    { coercion =
-                        Cf (fun v ->
-                                let body = coerce_codomain {pos; v = App (v, Vector.map (fun uv -> Uv uv) uvs, arg)} in
-                                {pos; v = Fn (universals', param, body)})
-                    ; residual =
-                        (match Vector1.of_vector universals' with
-                        | Some skolems -> ResidualMonoid.skolemized skolems arrows_residual
-                        | None -> arrows_residual) }
-                )
+            let param = {name = Name.fresh (); typ = domain'} in
+            let arg = coerce_domain {pos; v = Use param} in
+            let arrows_residual = combine domain_residual codomain_residual in
+            { coercion =
+                Cf (fun v ->
+                        let body = coerce_codomain {pos; v = App (v, Vector.map (fun uv -> Uv uv) uvs, arg)} in
+                        {pos; v = Fn (universals', param, body)})
+            ; residual =
+                (match Vector1.of_vector universals' with
+                | Some skolems -> ResidualMonoid.skolemized skolems arrows_residual
+                | None -> arrows_residual) }
 
         | (FcType.Record fields, FcType.Record super_fields) ->
             let locator_fields = match locator with
@@ -995,7 +931,8 @@ and solve pos env residual =
             solve env residual
 
         | Skolems (skolems, residual) ->
-            Env.preskolemized env (Vector1.to_vector skolems) (fun env -> solve env residual)
+            let env = Env.push_skolems env skolems in
+            solve env residual
 
         | Residuals (residual, residual') ->
             ResidualMonoid.combine (solve env residual) (solve env residual')
