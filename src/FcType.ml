@@ -190,6 +190,7 @@ let rec coercion_to_doc = function
     | Inst (co, arg) -> PPrint.infix 4 1 PPrint.at (instantiee_to_doc co) (to_doc arg)
     | AUse name -> Name.to_doc name
     | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
+    | Patchable {contents} -> coercion_to_doc contents
 
 and andco_to_doc = function
     | Trans _ as co -> PPrint.parens (coercion_to_doc co)
