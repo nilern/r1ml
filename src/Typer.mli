@@ -11,6 +11,7 @@ type error =
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
+    | Unsolvable of FcTerm.expr Ast.with_pos FcType.residual
     | ImpureType of Ast.Term.expr
     | Escape of ov
     | Occurs of uv * typ

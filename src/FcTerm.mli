@@ -22,6 +22,7 @@ type expr
     | Proxy of abs 
     | Use of lvalue
     | Const of Const.t
+    | Patchable of expr with_pos ref
 
 and def = span * lvalue * expr with_pos
 

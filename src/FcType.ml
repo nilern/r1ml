@@ -24,7 +24,6 @@ and abs =
 
 and t =
     | Pi of binding Vector.t * locator * t * effect * abs
-    | IPi of t Vector.t * t * effect * abs
     | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
@@ -50,10 +49,11 @@ and path =
     | UseP of binding
 
 and 'e residual =
-    | Sub of abs * abs * 'e ref
-    | Unify of abs * abs * 'e ref
+    | Sub of bool * t * locator * t * 'e ref
+    | Unify of t * t * coercion ref
     | Residuals of 'e residual * 'e residual
     | Skolems of binding Vector1.t * 'e residual
+    | Axioms of (Name.t * ov * uv) Vector1.t * 'e residual
 
 and coercion =
     | Refl of typ
@@ -63,6 +63,7 @@ and coercion =
     | Inst of coercion * typ
     | AUse of Name.t
     | TypeCo of coercion
+    | Patchable of coercion ref
 
 and typ = t
 and template = locator

@@ -19,24 +19,13 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : effect}
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (expr with_pos -> expr with_pos)
 
-module Residual = Residual(struct type t = expr end)
-
-type residual = Residual.t
-
-module ResidualMonoid = struct
-    include Monoid.OfSemigroup(Residual)
-
-    let skolemized skolems m = Option.map (fun r -> Skolems (skolems, r)) m
-end
-
-type 'a matching = {coercion : 'a; residual : residual option}
-
 type error =
     | Unbound of Name.t
     | MissingField of typ * string
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
+    | Unsolvable of expr with_pos residual
     | ImpureType of Ast.Term.expr
     | Escape of ov
     | Occurs of uv * typ
@@ -169,11 +158,10 @@ module Env = struct
               (universals', substitute substitution domain, eff, substitute_abs substitution codomain)
         )
 
-    let preskolemized ({scopes; current_level} as env) universals f =
+    let preskolemized ({scopes; current_level} as env) bindings f =
         with_incremented_level env (fun ({current_level = level; _} as env) ->
-            let bindings = Vector.map (fun (FcType.Use binding) -> binding) universals in
             let skolems = Vector.map (fun binding -> (binding, level)) bindings in
-            f {env with scopes = Universal skolems :: scopes} bindings
+            f {env with scopes = Universal skolems :: scopes}
         )
 
     let uv {current_level = level; _} binding =
@@ -229,6 +217,18 @@ module Env = struct
             | [] -> None
         in get env.scopes
 end
+
+module Residual = Residual(struct type t = FcTerm.expr with_pos end)
+
+type residual = Residual.t
+
+module ResidualMonoid = struct
+    include Monoid.OfSemigroup(Residual)
+
+    let skolemized skolems m = Option.map (fun r -> Skolems (skolems, r)) m
+end
+
+type 'a matching = {coercion : 'a; residual : residual option}
 
 let instantiate_abs env (existentials, locator, body) =
     let uvs = Vector1.map (fun (name, _) -> Env.uv env name) existentials in
@@ -299,6 +299,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
                     (fun env (existentials, codomain_locator, concr_codo) ->
                         let (_, _, res_typ) as typ = reabstract env codomain in
                         let {coercion = Cf coerce; residual} = coercion expr.pos true env concr_codo typ in
+                        solve expr.pos env residual;
 
                         let def = {name = Name.fresh (); typ = concr_codo} in
                         { term = {term with v = Unpack (existentials, def, term, coerce {expr with v = Use def})}
@@ -380,6 +381,7 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
         let {term; typ = expr_typ; eff} = typeof env expr in
         let lvalue = {name = Name.fresh (); typ = expr_typ} in
         let {coercion = Cf coerce; residual} = coercion expr.pos true env expr_typ typ in
+        solve expr.pos env residual;
         { term = {expr with v = Letrec ( Vector1.singleton (expr.pos, lvalue, term)
                                        , coerce {expr with v = Use lvalue} )}
         ; typ = body; eff}
@@ -507,7 +509,7 @@ and whnf pos env typ : bool * FcType.typ * coercion option =
             (match !uv with
             | Assigned typ -> eval typ
             | Unassigned _ -> (true, typ, None))
-        | (Pi _ | IPi _ | Record _ | Type _ | Int | Bool) as typ -> (true, typ, None)
+        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (true, typ, None)
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
     and apply : typ -> typ -> bool * typ * coercion option = fun callee arg ->
@@ -538,7 +540,8 @@ and lookup pos env name =
         | Env.BlackDecl ({name = _; typ = typ'} as lvalue, locator) ->
             (match typ with
             | NoE typ ->
-                let _ = unify pos env typ typ' in
+                let {coercion; residual} = unify pos env typ typ' in
+                solve pos env residual;
                 (Hole, lvalue)
             | _ -> raise (TypeError (pos, PolytypeInference typ)))
         | _ -> failwith "unreachable: non-decl from decl `lookup`")
@@ -561,6 +564,7 @@ and lookup pos env name =
             (match typ with
             | NoE typ ->
                 let {coercion = co; residual} = unify pos env typ typ' in
+                solve pos env residual;
                 binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
                 (Hole, lvalue)
             | _ -> raise (TypeError (pos, PolytypeInference typ)))
@@ -575,6 +579,7 @@ and lookup pos env name =
             (Hole, lvalue)
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
             let {coercion = Cf coerce; residual} = subtype expr.pos true env typ Hole typ' in
+            solve pos env residual;
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             (Hole, lvalue)
         | _ -> failwith "unreachable: non-unn from unn `lookup`")
@@ -684,7 +689,8 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
             let (universals, l, r) = axiomatize (Use binding) (Uv impl) kind in
             (axname, Vector.of_list universals, l, r)
         ) axiom_bindings in
-        {coercion = Cf (fun v -> {pos; v = Axiom (axioms, coerce v)}); residual}
+        { coercion = Cf (fun v -> {pos; v = Axiom (axioms, coerce v)})
+        ; residual = Option.map (fun residual -> FcType.Axioms (axiom_bindings, residual)) residual }
     | None -> subtype pos occ env typ super_locator super
 
 and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching = match typ with
@@ -841,10 +847,10 @@ and subtype pos occ env typ locator super : coercer matching =
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
         | _ -> raise (TypeError (pos, SubType (typ, super))) in
 
-    let (decidable, typ, co) = whnf pos env typ in
-    let (decidable', super, co') = whnf pos env super in
+    let (decidable, typ', co) = whnf pos env typ in
+    let (decidable', super', co') = whnf pos env super in
     if decidable && decidable' then begin
-        let {coercion = Cf coerce; residual} = subtype_whnf typ locator super in
+        let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
         { coercion =
             (match (co, co') with
             | (Some co, Some co') ->
@@ -853,7 +859,15 @@ and subtype pos occ env typ locator super : coercer matching =
             | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
             | (None, None) -> Cf coerce)
         ; residual }
-    end else failwith "todo"
+    end else begin
+        let patchable = ref {Ast.pos; v = Const (Int 0)} in
+        { coercion = Cf (fun v ->
+            patchable := v;
+            {pos; v = Patchable patchable})
+        ; residual = Some (Sub (occ, typ, locator, super, patchable)) }
+    end
+
+(* # Unification *)
 
 and unify_abs pos env typ typ' : coercion option matching = match (typ, typ') with
     | (NoE typ, NoE typ') -> unify pos env typ typ'
@@ -874,7 +888,12 @@ and unify pos env typ typ' : coercion option matching =
             | (None, None, Some co'') -> Some (Symm co'')
             | (None, None, None) -> None)
         ; residual }
-    end else failwith "todo"
+    end else begin
+        (*let patchable = ref (Refl typ') in
+        { coercion = Some (FcType.Patchable patchable)
+        ; residual = Some (Unify (typ, typ', patchable)) }*)
+        failwith "toodo"
+    end
 
 and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     let open ResidualMonoid in
@@ -956,6 +975,34 @@ and check_uv_assignee pos uv level typ =
         | Int | Bool -> ()
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`"
     in check typ
+
+(* # Constraint Solving *)
+
+and solve pos env residual =
+    let rec solve env = function
+        | Axioms (axiom_bindings, residual) ->
+            let env = Env.push_axioms env axiom_bindings in
+            solve env residual
+
+        | Skolems (skolems, residual) ->
+            Env.preskolemized env (Vector1.to_vector skolems) (fun env -> solve env residual)
+
+        | Residuals (residual, residual') ->
+            ResidualMonoid.combine (solve env residual) (solve env residual')
+
+        | Sub (occ, typ, locator, super, patchable) ->
+            let {coercion = Cf coerce; residual} = subtype pos occ env typ locator super in
+            patchable := coerce (!patchable);
+            residual
+
+        | Unify (typ, typ', patchable) ->
+            let {coercion; residual} = unify pos env typ typ' in
+            Option.iter (fun coercion -> patchable := coercion) coercion;
+            residual
+    in
+    (match Option.bind residual (solve env) with
+    | None -> ()
+    | Some residual -> raise (TypeError (pos, Unsolvable residual)))
 
 (* # REPL support *)
 

@@ -22,6 +22,7 @@ type expr
     | Proxy of abs 
     | Use of lvalue
     | Const of Const.t
+    | Patchable of expr with_pos ref
 
 and def = span * lvalue * expr with_pos
 
@@ -106,6 +107,7 @@ let rec expr_to_doc = function
     | Proxy typ -> PPrint.brackets (Type.abs_to_doc typ)
     | Use {name; _} -> Name.to_doc name
     | Const c -> Const.to_doc c
+    | Patchable {contents} -> expr_to_doc contents.v
 
 and callee_to_doc = function
     | (Fn _ | Cast _ | Letrec _ | LetType _ | Axiom _ | Unpack _) as callee -> PPrint.parens (expr_to_doc callee)
