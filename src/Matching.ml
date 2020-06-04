@@ -60,7 +60,7 @@ and articulate_template pos = function
     | Uv uv -> fun template ->
         (match uv with
         | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
-        | {contents = Unassigned (_, level)} ->
+        | {contents = Unassigned _} ->
             (match template with
             | PiL (_, Impure, _) ->
                 let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
@@ -178,7 +178,7 @@ and subtype pos occ env typ locator super : coercer matching =
             | None -> ())
         | UseP _ -> failwith "unreachable: UseP in `resolve_path`" in
 
-    let rec subtype_whnf typ locator super : coercer matching = match (typ, super) with
+    let subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, _) ->
             (match !uv with
             | Assigned typ -> subtype pos occ env typ locator super
@@ -195,7 +195,7 @@ and subtype pos occ env typ locator super : coercer matching =
                     (locator_universals, codomain_locator)
                 | Hole -> (Vector.of_list [], Hole)
                 | _ -> failwith "unreachable: function locator" in
-            let (env, (locator_universals, codomain_locator), (universals', domain', eff', codomain')) =
+            let (env, (_, codomain_locator), (universals', domain', eff', codomain')) =
                 Env.push_arrow_skolems env q_codomain_locator (universals', domain', eff', codomain') in
             let (uvs, domain_locator, domain, eff, codomain) =
                 C.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
@@ -368,7 +368,7 @@ and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
 (* FIXME: need to use `whnf` like subtype and unify do: *)
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
 and check_uv_assignee pos uv level typ =
-    let rec check = function
+    let check = function
         | Uv uv' ->
             if uv = uv'
             then raise (TypeError (pos, Occurs (uv, typ))) (* occurs *)
@@ -385,7 +385,7 @@ and check_uv_assignee pos uv level typ =
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)
         | Fn (param, body) -> ()
             (* FIXME: check_uv_assignee pos uv level body *)
-        | Pi (universals, domain_locator, domain, _, codomain) ->
+        | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
             then begin
                 check_uv_assignee pos uv level domain;

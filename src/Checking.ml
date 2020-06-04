@@ -57,7 +57,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         let callee = {name = Name.fresh (); typ = callee_typ} in
         (match M.focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
         | (Cf coerce, Pi (universals, locator, domain, app_eff, codomain)) ->
-            let (uvs, domain_locator, domain, app_eff, codomain) =
+            let (uvs, _, domain, app_eff, codomain) =
                 instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
             
             let {Env.term = arg; typ = _; eff = arg_eff} = check env (NoE domain) arg in
@@ -70,7 +70,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             let eff = join_effs (join_effs callee_eff arg_eff) app_eff in
             (match codomain with
             | Exists (existentials, codomain_locator, concr_codo) ->
-                let (env, existentials, codomain_locator, concr_codo) =
+                let (env, existentials, _, concr_codo) =
                     Env.push_abs_skolems env (existentials, codomain_locator, concr_codo) in
                 let (_, _, res_typ) as typ = reabstract env codomain in
                 let {coercion = Cf coerce; residual} = M.coercion expr.pos true env concr_codo typ in
@@ -167,6 +167,9 @@ and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has
     match Env.get pos env name with
     | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) -> (* FIXME: use coercion *)
         let {Env.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
+        let expr = match coercion with
+            | Some coercion -> {expr with v = Cast (expr, coercion)}
+            | None -> expr in
         {term = (pos, lvalue, expr); typ; eff}
     | (_, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
