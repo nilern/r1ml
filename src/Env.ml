@@ -12,12 +12,12 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
 
-type 'a matching = {coercion : 'a; residual : FcTerm.expr with_pos residual option}
+type 'a matching = {coercion : 'a; residual : Residual.t option}
 (* /HACK *)
 
 type val_binder =
-    | WhiteDecl of Ast.Type.decl
-    | GreyDecl of Ast.Type.decl
+    | WhiteDecl of Name.t Ast.Type.decl
+    | GreyDecl of Name.t Ast.Type.decl
     | BlackDecl of lvalue * locator
     | WhiteDef of Ast.Term.lvalue * Ast.Term.expr with_pos
     | GreyDef of Ast.Term.lvalue * Ast.Term.expr with_pos
@@ -112,7 +112,7 @@ let push_domain env binding locator =
     {env with scopes = Fn (ref (BlackDecl (binding, locator))) :: env.scopes}
 
 let push_sig env bindings =
-    let bindings = Vector.fold_left (fun bindings ({name; _} as binding : Ast.Type.decl) ->
+    let bindings = Vector.fold_left (fun bindings ({name; _} as binding : Name.t Ast.Type.decl) ->
         Name.Map.add name (ref (WhiteDecl binding)) bindings
     ) Name.Map.empty bindings in
     {env with scopes = Sig bindings :: env.scopes}

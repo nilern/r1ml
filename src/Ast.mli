@@ -30,17 +30,15 @@ end
 
 and Type : sig
     type t =
-        | Pi of domain * Effect.t * t with_pos
-        | Sig of decl Vector.t
+        | Pi of Name.t option decl * Effect.t * t with_pos
+        | Sig of Name.t decl Vector.t
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
         | Int
         | Bool
 
-    and decl = {name : Name.t; typ : t with_pos}
-
-    and domain = {name : Name.t option; typ : t with_pos}
+    and 'a decl = {name : 'a; typ : t with_pos}
 
     val to_doc : t -> PPrint.document
 end

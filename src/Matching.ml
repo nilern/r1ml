@@ -1,17 +1,14 @@
 type 'a with_pos = 'a Ast.with_pos
 
-module Residual = FcType.Residual(struct type t = FcTerm.expr with_pos end)
-
-type residual = Residual.t
-
 module ResidualMonoid = struct
     include Monoid.OfSemigroup(Residual)
 
-    let skolemized skolems m = Option.map (fun r -> FcType.Skolems (skolems, r)) m
+    let skolemized skolems m = Option.map (fun r -> Residual.Skolems (skolems, r)) m
 end
 
 module Make (C : TyperSigs.CHECKING) : TyperSigs.MATCHING = struct
 
+open Residual
 open FcType
 open Effect
 open FcTerm
@@ -121,7 +118,7 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
             (axname, Vector.of_list universals, l, r)
         ) axiom_bindings in
         { coercion = Cf (fun v -> {pos; v = Axiom (axioms, coerce v)})
-        ; residual = Option.map (fun residual -> FcType.Axioms (axiom_bindings, residual)) residual }
+        ; residual = Option.map (fun residual -> Residual.Axioms (axiom_bindings, residual)) residual }
     | None -> subtype pos occ env typ super_locator super
 
 and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching = match typ with
@@ -179,7 +176,7 @@ and subtype pos occ env typ locator super : coercer matching =
             (match Env.get_implementation env ov with
             | Some (_, _, uv) -> resolve_path typ (UvP uv)
             | None -> ())
-        | UseP _ -> () in
+        | UseP _ -> failwith "unreachable: UseP in `resolve_path`" in
 
     let rec subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, _) ->
@@ -249,7 +246,7 @@ and subtype pos occ env typ locator super : coercer matching =
             | TypeL path ->
                 (match carrie with
                 | NoE impl ->
-                    let (decidable, impl, _) = C.whnf pos env impl in
+                    let (decidable, impl, _) = C.whnf env impl in
                     if decidable then begin
                         resolve_path impl path;
                         {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
@@ -276,8 +273,8 @@ and subtype pos occ env typ locator super : coercer matching =
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
         | _ -> raise (TypeError (pos, SubType (typ, super))) in
 
-    let (decidable, typ', co) = C.whnf pos env typ in
-    let (decidable', super', co') = C.whnf pos env super in
+    let (decidable, typ', co) = C.whnf env typ in
+    let (decidable', super', co') = C.whnf env super in
     if decidable && decidable' then begin
         let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
         { coercion =
@@ -302,8 +299,8 @@ and unify_abs pos env typ typ' : coercion option matching = match (typ, typ') wi
     | (NoE typ, NoE typ') -> unify pos env typ typ'
 
 and unify pos env typ typ' : coercion option matching =
-    let (decidable, typ, co) = C.whnf pos env typ in
-    let (decidable', typ', co'') = C.whnf pos env typ' in
+    let (decidable, typ, co) = C.whnf env typ in
+    let (decidable', typ', co'') = C.whnf env typ' in
     if decidable && decidable' then begin
         let {Env.coercion = co'; residual} = unify_whnf pos env typ typ' in
         { coercion =
@@ -318,10 +315,9 @@ and unify pos env typ typ' : coercion option matching =
             | (None, None, None) -> None)
         ; residual }
     end else begin
-        (*let patchable = ref (Refl typ') in
+        let patchable = ref (Refl typ') in
         { coercion = Some (FcType.Patchable patchable)
-        ; residual = Some (Unify (typ, typ', patchable)) }*)
-        failwith "toodo"
+        ; residual = Some (Unify (typ, typ', patchable)) }
     end
 
 and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
@@ -369,6 +365,7 @@ and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
     | NoE typ -> check_uv_assignee pos uv level typ
     | Exists _ as typ -> raise (TypeError (pos, Polytype typ)) (* not a monotype *)
 
+(* FIXME: need to use `whnf` like subtype and unify do: *)
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
 and check_uv_assignee pos uv level typ =
     let rec check = function
@@ -382,7 +379,7 @@ and check_uv_assignee pos uv level typ =
                     if level' <= level
                     then ()
                     else uv' := Unassigned (name, level)) (* hoist *)
-        | Ov ((_, level') as ov) ->
+        | Ov ((_, level') as ov) -> (* FIXME: need to try and get impl!: *)
             if level' <= level
             then ()
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)

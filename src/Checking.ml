@@ -145,9 +145,9 @@ and check env (typ : abs) (expr : Ast.Term.expr with_pos) =
 and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
     match expr.v with
     | Ast.Term.If (cond, conseq, alt) ->
-        let {Env.term = cond; eff = cond_eff} = check env (NoE Bool) cond in
-        let {Env.term = conseq; eff = conseq_eff} = implement env typ conseq in
-        let {Env.term = alt; eff = alt_eff} = implement env typ alt in
+        let {Env.term = cond; typ = _; eff = cond_eff} = check env (NoE Bool) cond in
+        let {Env.term = conseq; typ = _; eff = conseq_eff} = implement env typ conseq in
+        let {Env.term = alt; typ = _; eff = alt_eff} = implement env typ alt in
         { term = {expr with v = If (cond, conseq, alt)}
         ; typ = body
         ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
@@ -168,7 +168,7 @@ and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has
     | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) -> (* FIXME: use coercion *)
         let {Env.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
         {term = (pos, lvalue, expr); typ; eff}
-    | (env, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
+    | (_, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
         {term = (pos, lvalue, expr); typ; eff}
     | (_, {contents = WhiteDecl _ | GreyDecl _ | BlackDecl _ | WhiteDef _ | GreyDef _; _}) ->
         failwith "unreachable: decl or non-black binding in `deftype`"
@@ -258,7 +258,7 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
     | None -> NoE typ
 
 (* TODO: boolean flags considered harmful *)
-and whnf pos env typ : bool * FcType.typ * coercion option =
+and whnf env typ : bool * FcType.typ * coercion option =
     let rec eval : FcType.typ -> bool * FcType.typ * coercion option = function
         | App (callee, arg) ->
             let (decidable, callee, callee_co) = eval callee in
@@ -314,10 +314,10 @@ and lookup pos env name =
             let lvalue = {name; typ} in
             binding := Env.BlackDecl (lvalue, locator);
             (locator, lvalue)
-        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, locator) ->
+        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, _) ->
             (match typ with
             | NoE typ ->
-                let {Env.coercion; residual} = M.unify pos env typ typ' in
+                let {Env.coercion = _; residual} = M.unify pos env typ typ' in
                 M.solve pos env residual;
                 (Hole, lvalue)
             | _ -> raise (TypeError (pos, PolytypeInference typ)))

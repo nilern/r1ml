@@ -1,7 +1,8 @@
+open Residual
 open FcType
 
 type effect = Effect.t
-type typ = t
+type typ = FcType.t
 type abs = FcType.abs
 
 type error =
@@ -10,7 +11,7 @@ type error =
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
-    | Unsolvable of FcTerm.expr Ast.with_pos FcType.residual
+    | Unsolvable of Residual.t
     | ImpureType of Ast.Term.expr
     | Escape of FcType.ov
     | Occurs of FcType.uv * typ

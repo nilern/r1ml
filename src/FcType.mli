@@ -51,13 +51,6 @@ and path =
     | UvP of uv
     | UseP of binding
 
-and 'e residual =
-    | Sub of bool * t * locator * t * 'e ref
-    | Unify of t * t * coercion ref
-    | Residuals of 'e residual * 'e residual
-    | Skolems of binding Vector1.t * 'e residual
-    | Axioms of (Name.t * ov * uv) Vector1.t * 'e residual
-
 and coercion =
     | Refl of typ
     | Symm of coercion
@@ -70,8 +63,6 @@ and coercion =
 
 and typ = t
 and template = locator
-
-module Residual : functor (E : sig type t end) -> Semigroup.S with type t = E.t residual (* HACK *)
 
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document

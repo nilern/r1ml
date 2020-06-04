@@ -3,7 +3,7 @@ let (^/^) = PPrint.(^/^)
 
 type span = Lexing.position * Lexing.position
 
-let pos_to_string ({pos_lnum = line; pos_bol = bol; pos_cnum = offset} : Lexing.position) =
+let pos_to_string ({pos_lnum = line; pos_bol = bol; pos_cnum = offset; pos_fname = _} : Lexing.position) =
     Int.to_string line ^ ":" ^ Int.to_string (offset - bol)
 let span_to_string (pos, pos') = pos_to_string pos ^ "-" ^ pos_to_string pos'
 
@@ -101,32 +101,28 @@ end
 
 and Type : sig
     type t =
-        | Pi of domain * Effect.t * t with_pos
-        | Sig of decl Vector.t
+        | Pi of Name.t option decl * Effect.t * t with_pos
+        | Sig of Name.t decl Vector.t
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
         | Int
         | Bool
 
-    and decl = {name : Name.t; typ : t with_pos}
-
-    and domain = {name : Name.t option; typ : t with_pos}
+    and 'a decl = {name : 'a; typ : t with_pos}
 
     val to_doc : t -> PPrint.document
 end = struct
     type t =
-        | Pi of domain * Effect.t * t with_pos
-        | Sig of decl Vector.t
+        | Pi of Name.t option decl * Effect.t * t with_pos
+        | Sig of Name.t decl Vector.t
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
         | Int
         | Bool
 
-    and decl = {name : Name.t; typ : t with_pos}
-
-    and domain = {name : Name.t option; typ : t with_pos}
+    and 'a decl = {name : 'a; typ : t with_pos}
 
     let rec to_doc = function
         | Pi (domain, eff, codomain) ->

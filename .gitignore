@@ -2,6 +2,7 @@ _build
 *.native
 *.byte
 *.docdir
+.merlin
 
 setup.data
 setup.log

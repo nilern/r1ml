@@ -1,0 +1,7 @@
+(executable
+  (name r1ml)
+  (libraries menhirLib pprint linenoise)
+  (preprocess (pps sedlex.ppx)))
+
+(menhir (modules Parser))
+
