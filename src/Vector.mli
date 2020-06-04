@@ -14,6 +14,7 @@ val to_list : 'a t -> 'a list
 
 val fold_left : ('a -> 'b -> 'a) -> 'a -> 'b t -> 'a
 val fold_right : ('b -> 'a -> 'a) -> 'b t -> 'a -> 'a
+val for_all : ('a -> bool) -> 'a t -> bool
 val map : ('a -> 'b) -> 'a t -> 'b t
 val iter : ('a -> unit) -> 'a t -> unit
 val find_opt : ('a -> bool) -> 'a t -> 'a option

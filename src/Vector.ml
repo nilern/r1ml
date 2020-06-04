@@ -10,6 +10,7 @@ let to_list = Array.to_list
 
 let fold_left = Array.fold_left
 let fold_right = Array.fold_right
+let for_all = Array.for_all
 let map = Array.map
 let iter = Array.iter
 

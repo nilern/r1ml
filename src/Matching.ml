@@ -188,25 +188,25 @@ and subtype pos occ env typ locator super : coercer matching =
             | _ -> failwith "unreachable: uv path in locator with non-ov arg")
         | UvP uv ->
             (match !uv with
-            | Assigned _ -> ()
+            | Assigned _ -> true
             | Unassigned (_, level) ->
-                check_uv_assignee pos uv level typ;
-                uv := Assigned typ)
+                check_uv_assignee pos env uv level typ
+                    && begin uv := Assigned typ; true end)
         | OvP ov ->
             (match Env.get_implementation env ov with
             | Some (_, _, uv) -> resolve_path typ (UvP uv)
-            | None -> ())
+            | None -> true)
         | UseP _ -> failwith "unreachable: UseP in `resolve_path`" in
 
     let subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, _) ->
             (match !uv with
-            | Assigned typ -> subtype pos occ env typ locator super
-            | Unassigned _ -> subtype pos false env (articulate pos typ super) locator super)
+            | Unassigned _ -> subtype pos false env (articulate pos typ super) locator super
+            | Assigned _ -> failwith "unreachable: Assigned `typ` in `subtype_whnf`")
         | (_, Uv uv) ->
             (match !uv with
-            | Assigned super -> subtype pos occ env typ locator super
-            | Unassigned _ -> subtype pos false env typ locator (articulate pos super typ))
+            | Unassigned _ -> subtype pos false env typ locator (articulate pos super typ)
+            | Assigned _ -> failwith "unreachable: Assigned `super` in `subtype_whnf`")
 
         | ( Pi (universals, domain_locator, domain, eff, codomain)
           , Pi (universals', _, domain', eff', codomain') ) ->
@@ -267,10 +267,9 @@ and subtype pos occ env typ locator super : coercer matching =
                 (match carrie with
                 | NoE impl ->
                     let (decidable, impl, _) = C.whnf env impl in
-                    if decidable then begin
-                        resolve_path impl path;
-                        {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
-                    end else failwith "todo"
+                    if decidable && resolve_path impl path
+                    then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
+                    else failwith "todo"
                 | Exists _ -> raise (TypeError (pos, Polytype carrie)))
             | Hole -> (* TODO: Use unification (?) *)
                 let {Env.coercion = _; residual} = subtype_abs pos occ env carrie Hole carrie' in
@@ -345,18 +344,28 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     match (typ, typ') with
     | (Uv uv, _) ->
         (match !uv with
-        | Assigned typ -> unify_whnf pos env typ typ'
         | Unassigned (_, level) ->
-            check_uv_assignee pos uv level typ';
-            uv := Assigned typ';
-            {coercion = None; residual = empty})
+            if check_uv_assignee pos env uv level typ' then begin
+                uv := Assigned typ';
+                {coercion = None; residual = empty}
+            end else begin
+                let patchable = ref (Refl typ') in
+                { coercion = Some (FcType.Patchable patchable)
+                ; residual = Some (Unify (typ, typ', patchable)) }
+            end
+        | Assigned _ -> failwith "unreachable: Assigned `typ` in `unify_whnf`")
     | (_, Uv uv) ->
         (match !uv with
-        | Assigned typ' -> unify_whnf pos env typ typ'
         | Unassigned (_, level) ->
-            check_uv_assignee pos uv level typ;
-            uv := Assigned typ;
-            {coercion = None; residual = empty})
+            if check_uv_assignee pos env uv level typ then begin
+                uv := Assigned typ;
+                {coercion = None; residual = empty}
+            end else begin
+                let patchable = ref (Refl typ') in
+                { coercion = Some (FcType.Patchable patchable)
+                ; residual = Some (Unify (typ, typ', patchable)) }
+            end
+        | Assigned _ -> failwith "unreachable: Assigned `typ'` in `unify_whnf`")
     | (Type carrie, Type carrie') ->
         let {Env.coercion; residual} = unify_abs pos env carrie carrie' in
         { coercion =
@@ -381,46 +390,49 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Int, Int) | (Bool, Bool) -> {coercion = None; residual = empty}
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
-and check_uv_assignee_abs pos uv level : FcTerm.abs -> unit = function
-    | NoE typ -> check_uv_assignee pos uv level typ
+and check_uv_assignee_abs pos env uv level : FcTerm.abs -> bool = function
+    | NoE typ -> check_uv_assignee pos env uv level typ
     | Exists _ as typ -> raise (TypeError (pos, Polytype typ)) (* not a monotype *)
 
-(* FIXME: need to use `whnf` like subtype and unify do: *)
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
-and check_uv_assignee pos uv level typ =
+and check_uv_assignee pos env uv level typ =
     let check = function
         | Uv uv' ->
             if uv = uv'
             then raise (TypeError (pos, Occurs (uv, typ))) (* occurs *)
             else
                 (match !uv' with
-                | Assigned typ -> check_uv_assignee pos uv level typ
+                | Assigned typ -> check_uv_assignee pos env uv level typ
                 | Unassigned (name, level') ->
                     if level' <= level
-                    then ()
-                    else uv' := Unassigned (name, level)) (* hoist *)
-        | Ov ((_, level') as ov) -> (* FIXME: need to try and get impl!: *)
+                    then true
+                    else (uv' := Unassigned (name, level); true) (* hoist *)
+                | Assigned _ -> failwith "unreachable: Assigned `uv'` in `check_uv_assignee`")
+        | Ov ((_, level') as ov) ->
             if level' <= level
-            then ()
+            then true
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)
-        | Fn (param, body) -> ()
+        | Fn (param, body) -> true
             (* FIXME: check_uv_assignee pos uv level body *)
         | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
             then begin
-                check_uv_assignee pos uv level domain;
-                check_uv_assignee_abs pos uv level codomain
+                check_uv_assignee pos env uv level domain
+                    && check_uv_assignee_abs pos env uv level codomain
             end
             else raise (TypeError (pos, Polytype (NoE typ))) (* not a monotype *)
         | Record fields ->
-            Vector.iter (fun {label = _; typ} -> check_uv_assignee pos uv level typ) fields
-        | Type carrie -> check_uv_assignee_abs pos uv level carrie
+            Vector.for_all (fun {label = _; typ} -> check_uv_assignee pos env uv level typ) fields
+        | Type carrie -> check_uv_assignee_abs pos env uv level carrie
         | App (callee, arg) ->
-            check_uv_assignee pos uv level callee;
-            check_uv_assignee pos uv level arg
-        | Int | Bool -> ()
-        | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`"
-    in check typ
+            check_uv_assignee pos env uv level callee
+                && check_uv_assignee pos env uv level arg
+        | Int | Bool -> true
+        | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
+
+    match C.whnf env typ with
+    | (true, typ, _) -> check typ
+    | (false, _, _) -> false
 
 (* # Constraint Solving *)
 
