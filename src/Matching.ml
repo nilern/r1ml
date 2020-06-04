@@ -17,75 +17,58 @@ open TypeError
 type coercer = TyperSigs.coercer
 type 'a matching = 'a TyperSigs.matching
 
-(* # Articulation *)
-
-let rec articulate pos = function
-    | Uv uv as uv_typ -> fun template ->
-        (match uv with
-        | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
-        | {contents = Unassigned (_, level)} ->
-            (match template with
-            | Pi _ ->
-                let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
-                uv := Assigned typ;
-                typ
-            | Type _ ->
-                let typ = Type (NoE (Uv (sibling uv))) in
-                uv := Assigned typ;
-                typ
-            | Int -> uv := Assigned Int; Int
-            | Bool -> uv := Assigned Bool; Bool
-            | Ov ov ->
-                let typ = Ov ov in
-                uv := Assigned typ;
-                typ
-            | Uv uv' ->
-                (match !uv' with
-                | Assigned template -> articulate pos uv_typ template
-                | Unassigned (_, level') ->
-                    if level' <= level then begin
-                        let typ = Uv uv' in
-                        uv := Assigned typ;
-                        typ
-                    end else begin
-                        let typ = Uv uv in
-                        uv' := Assigned typ;
-                        typ
-                    end)
-            | Record _ -> raise (TypeError (pos, RecordArticulation template)) (* no can do without row typing *)
-            | Use _ -> failwith "unreachable: `Use` as template of `articulate`"))
-    | _ -> failwith "unreachable: `articulate` on non-uv"
-
-and articulate_template pos = function
-    | Uv uv -> fun template ->
-        (match uv with
-        | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv"
-        | {contents = Unassigned _} ->
-            (match template with
-            | PiL (_, Impure, _) ->
-                let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
-                uv := Assigned typ;
-                typ
-            | TypeL (UseP _) ->
-                let typ = Type (NoE (Uv (sibling uv))) in
-                uv := Assigned typ;
-                typ
-            | RecordL _ -> raise (TypeError (pos, RecordArticulationL template)))) (* no can do without row typing *)
-    | _ -> failwith "unreachable: `articulate` on non-uv"
-
 (* # Focalization *)
 
-and focalize pos env typ (template : FcType.template) : coercer * typ = match (typ, template) with
-    | (Uv uv, _) ->
-        (match !uv with
-        | Assigned typ -> focalize pos env typ template
-        | Unassigned _ -> (Cf (fun v -> v), articulate_template pos typ template))
-    | (Pi _, PiL _) | (Type _, TypeL _) -> (Cf (fun v -> v), typ)
-    | (FcType.Record fields, RecordL req_fields) ->
-        let {label; typ = _} = Vector.get req_fields 0 in
-        (match Vector.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
-        | Some {label = _; typ = field_typ} -> (Cf (fun v -> v), Record (Vector.singleton {label; typ = field_typ}))
-        | None -> raise (TypeError (pos, MissingField (typ, label))))
+let rec focalize pos env typ (template : FcType.template) : coercer * typ =
+    let articulate_template pos uv_typ template = match uv_typ with
+        | Uv uv ->
+            (match uv with
+            | {contents = Unassigned _} ->
+                (match template with
+                | PiL _ ->
+                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
+                    uv := Assigned typ;
+                    typ
+                | TypeL _ ->
+                    let typ = Type (NoE (Uv (sibling uv))) in
+                    uv := Assigned typ;
+                    typ
+                | RecordL _ -> raise (TypeError (pos, RecordArticulationL template)) (* no can do without row typing *)
+                | Hole -> failwith "unreachable: Hole as template in `articulate_template`")
+            | {contents = Assigned _} -> failwith "unreachable: `articulate_template` on assigned uv")
+        | _ -> failwith "unreachable: `articulate_template` on non-uv" in
+
+    let focalize_whnf typ = match typ with
+        | Uv {contents = Unassigned _} -> (Env.Cf Fun.id, articulate_template pos typ template)
+        | Uv {contents = Assigned _} -> failwith "unreachable: Assigned uv in `focalize`."
+        | _ ->
+            (match template with
+            | PiL _ ->
+                (match typ with
+                | Pi _ -> (Cf Fun.id, typ)
+                | _ -> raise (TypeError (pos, Unusable (template, typ))))
+            | TypeL _ ->
+                (match typ with
+                | Type _ -> (Cf Fun.id, typ)
+                | _ -> raise (TypeError (pos, Unusable (template, typ))))
+            | RecordL req_fields ->
+                (match typ with
+                | FcType.Record fields ->
+                    let {label; typ = _} = Vector.get req_fields 0 in
+                    (match Vector.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
+                    | Some {label = _; typ = field_typ} -> (Cf (fun v -> v), Record (Vector.singleton {label; typ = field_typ}))
+                    | None -> raise (TypeError (pos, MissingField (typ, label))))
+                | _ -> raise (TypeError (pos, Unusable (template, typ))))
+            | Hole -> failwith "unreachable: Hole as template in `focalize`.") in
+
+    match C.whnf env typ with
+    | (true, typ, coercion) ->
+        let (Cf cf as coercer, typ) = focalize_whnf typ in
+        ( (match coercion with
+          | Some coercion -> Env.Cf (fun v -> cf {pos; v = Cast (v, coercion)})
+          | None -> coercer)
+        , typ )
+    | (false, _, _) -> failwith "unreachable: `whnf` failed in `focalize`."
 
 (* # Subtyping *)
 
@@ -160,6 +143,43 @@ and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer
 and subtype pos occ env typ locator super : coercer matching =
     let empty = ResidualMonoid.empty in
     let combine = ResidualMonoid.combine in
+
+    let articulate pos uv_typ template = match uv_typ with
+        | Uv uv ->
+            (match uv with
+            | {contents = Unassigned (_, level)} ->
+                (match template with
+                | Pi _ ->
+                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
+                    uv := Assigned typ;
+                    typ
+                | Type _ ->
+                    let typ = Type (NoE (Uv (sibling uv))) in
+                    uv := Assigned typ;
+                    typ
+                | Int -> uv := Assigned Int; Int
+                | Bool -> uv := Assigned Bool; Bool
+                | Ov ov ->
+                    let typ = Ov ov in
+                    uv := Assigned typ;
+                    typ
+                | Uv uv' ->
+                    (match !uv' with
+                    | Unassigned (_, level') ->
+                        if level' <= level then begin
+                            let typ = Uv uv' in
+                            uv := Assigned typ;
+                            typ
+                        end else begin
+                            let typ = Uv uv in
+                            uv' := Assigned typ;
+                            typ
+                        end
+                    | Assigned _ -> failwith "unreachable: Assigned as template of `articulate`")
+                | Record _ -> raise (TypeError (pos, RecordArticulation template)) (* no can do without row typing *)
+                | Use _ -> failwith "unreachable: `Use` as template of `articulate`")
+            | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv")
+        | _ -> failwith "unreachable: `articulate` on non-uv" in
 
     let rec resolve_path typ path = match path with
         | AppP (path, arg) ->

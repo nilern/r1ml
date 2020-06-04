@@ -298,8 +298,8 @@ and whnf env typ : bool * FcType.typ * coercion option =
         | Ov _ | App _ -> (true, FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with
-            | Assigned callee -> apply callee arg
-            | Unassigned _ -> (false, FcType.App (callee, arg), None))
+            | Unassigned _ -> (false, FcType.App (callee, arg), None)
+            | Assigned _ -> failwith "unreachable: Assigned in `apply`.")
         | Pi _ | Record _ | Type _ | Int | Bool | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
     in eval typ

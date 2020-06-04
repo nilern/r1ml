@@ -4,6 +4,7 @@ type abs = FcType.abs
 
 type error =
     | Unbound of Name.t
+    | Unusable of FcType.locator * typ
     | MissingField of typ * string
     | SubEffect of effect * effect
     | SubType of typ * typ

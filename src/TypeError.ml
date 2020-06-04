@@ -7,6 +7,7 @@ type abs = FcType.abs
 
 type error =
     | Unbound of Name.t
+    | Unusable of FcType.locator * typ
     | MissingField of typ * string
     | SubEffect of effect * effect
     | SubType of typ * typ
@@ -26,6 +27,13 @@ let (^/^) = PPrint.(^/^)
 
 let rec cause_to_doc = function
     | Unbound name -> PPrint.string "unbound name" ^/^ Name.to_doc name
+    | Unusable (template, typ) ->
+        FcType.to_doc typ ^/^
+        (match template with
+        | PiL _ -> PPrint.string "is uncallable"
+        | RecordL _ -> PPrint.string "is not a record"
+        | TypeL _ -> PPrint.string "is not a type"
+        | Hole -> failwith "unreachable: Unusable as Hole")
     | MissingField (typ, label) -> FcType.to_doc typ ^/^ PPrint.string "is missing field" ^/^ PPrint.string label
     | SubEffect (eff, eff') -> Ast.Effect.to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.Effect.to_doc eff'
     | SubType (typ, super) -> FcType.to_doc typ ^/^ PPrint.string "is not a subtype of" ^/^ FcType.to_doc super
