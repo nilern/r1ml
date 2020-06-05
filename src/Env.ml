@@ -67,38 +67,31 @@ let generate env binding =
 let push_domain_skolems ({scopes; current_level} as env) = function
     | Exists (existentials, locator, domain) ->
         let level = current_level + 1 in
-        let skolems = Vector.map (fun binding -> (binding, level)) (Vector1.to_vector existentials) in
-        let substitution = Vector.fold_left (fun substitution (((name, _), _) as skolem) ->
-            Name.Map.add name (OvP skolem) substitution
-        ) Name.Map.empty skolems in
+        let skolems = Vector1.map (fun kind -> ((Name.fresh (), kind), level)) existentials in
+        let substitution = Vector1.map (fun ov -> OvP ov) skolems in
+        let skolems = Vector1.to_vector skolems in
         ( {scopes = Universal skolems :: scopes; current_level = level}
-        , skolems, substitute_locator substitution locator, substitute substitution domain )
+        , skolems, expose_locator substitution locator, expose substitution domain )
     | NoE domain -> (env, Vector.of_list [], Hole, domain)
 
 let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
     let level = current_level + 1 in
-    let existentials' = Vector1.map FcType.freshen existentials in
-    let skolems = Vector1.map (fun binding -> (binding, level)) existentials' in
-    let substitution = Vector1.fold_left (fun substitution (((name, _), _) as skolem) ->
-        Name.Map.add name (OvP skolem) substitution
-    ) Name.Map.empty skolems in
-    ( {scopes = Existential (ref (Vector1.to_list existentials'), level) :: scopes; current_level = level}
-    , existentials', substitute_locator substitution locator, substitute substitution body )
+    let ebs = Vector1.map (fun kind -> (Name.fresh (), kind)) existentials in
+    let skolems = Vector1.map (fun binding -> (binding, level)) ebs in
+    let substitution = Vector1.map (fun ov -> OvP ov) skolems in
+    ( { scopes = Universal (Vector1.to_vector skolems) :: scopes (* HACK: Universal *)
+      ; current_level = level }
+    , ebs, expose_locator substitution locator, expose substitution body )
 
-let push_arrow_skolems {scopes; current_level} (locator_universals, codomain_locator)
-        (universals, domain, eff, codomain) =
+let push_arrow_skolems {scopes; current_level} universals codomain_locator (domain, eff, codomain) =
     let level = current_level + 1 in
-    let universals' = Vector.map FcType.freshen universals in
-    let skolems = Vector.map (fun binding -> (binding, level)) universals' in
-    let substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
-        Name.Map.add name (OvP skolem) substitution
-    ) Name.Map.empty universals skolems in
-    let locator_substitution = Vector.fold_left2 (fun substitution (name, _) skolem ->
-        Name.Map.add name (OvP skolem) substitution
-    ) Name.Map.empty locator_universals skolems in
-    ( {scopes = Universal skolems :: scopes; current_level = level}
-    , (universals', substitute_locator locator_substitution codomain_locator)
-    , (universals', substitute substitution domain, eff, substitute_abs substitution codomain) )
+    let ubs = Vector1.map (fun kind -> (Name.fresh (), kind)) universals in
+    let skolems = Vector1.map (fun binding -> (binding, level)) ubs in
+    let substitution = Vector1.map (fun ov -> OvP ov) skolems in
+    ( {scopes = Universal (Vector1.to_vector skolems) :: scopes; current_level = level}
+    , Vector1.to_vector ubs
+    , expose_locator substitution codomain_locator
+    , (expose substitution domain, eff, expose_abs substitution codomain) )
 
 let push_skolems {scopes; current_level} bindings =
     let level = current_level + 1 in

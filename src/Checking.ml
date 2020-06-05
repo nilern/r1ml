@@ -8,19 +8,18 @@ open TypeError
 type 'a with_pos = 'a Ast.with_pos
 
 let instantiate_abs env (existentials, locator, body) =
-    let uvs = Vector1.map (fun (name, _) -> Env.uv env name) existentials in
-    let substitution = Vector1.fold_left2 (fun substitution (name, _) uv ->
-            Name.Map.add name (UvP uv) substitution
-    ) Name.Map.empty existentials uvs in
-    (uvs, substitute_locator substitution locator, substitute substitution body)
+    let uvs = Vector1.map (fun _ -> Env.uv env (Name.fresh ())) existentials in
+    let substitution = Vector1.map (fun uv -> UvP uv) uvs in
+    (uvs, expose_locator substitution locator, expose substitution body)
 
 let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
-    let uvs = Vector.map (fun (name, _) -> Env.uv env name) universals in
-    let substitution = Vector.fold_left2 (fun substitution (name, _) uv ->
-            Name.Map.add name (UvP uv) substitution
-    ) Name.Map.empty universals uvs in
-    ( uvs, substitute_locator substitution domain_locator, substitute substitution domain
-    , eff, substitute_abs substitution codomain )
+    match Vector1.of_vector universals with
+    | Some universals ->
+        let uvs = Vector1.map (fun _ -> Env.uv env (Name.fresh())) universals in
+        let substitution = Vector1.map (fun uv -> UvP uv) uvs in
+        ( Vector1.to_vector uvs, expose_locator substitution domain_locator
+        , expose substitution domain, eff, expose_abs substitution codomain )
+    | None -> (Vector.of_list [], domain_locator, domain, eff, codomain)
 
 (* # Effects *)
 
@@ -45,12 +44,26 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         let (body, codomain) = match Vector1.of_list (!existentials) with
             | Some existentials ->
                 let uses = Vector1.map (fun binding -> FcType.Use binding) existentials in
+                let (_, substitution) = Vector1.fold_left (fun (i, substitution) (name, _) ->
+                    (i + 1, Name.Map.add name i substitution)
+                ) (0, Name.Map.empty) existentials in
                 ( {body with Ast.v = LetType (existentials, {body with v = Pack (uses, body)})}
-                , Exists (existentials, Hole, codomain) ) (* HACK: Hole *)
+                , Exists (Vector1.map snd existentials, Hole, close substitution codomain) ) (* HACK: Hole *)
             | None -> (body, NoE codomain) in
-        { term = {expr with v = Fn (universals, {name; typ = domain}, body)}
-        ; typ = Pi (universals, domain_locator, domain, eff, codomain)
-        ; eff = Pure }
+        let term = {expr with v = Fn (universals, {name; typ = domain}, body)} in
+
+        let typ = 
+            let (domain_locator, domain, codomain) = match Vector1.of_vector universals with
+                | Some universals ->
+                    let (_, substitution) = Vector1.fold_left (fun (i, substitution) (name, _) ->
+                        (i + 1, Name.Map.add name i substitution)
+                    ) (0, Name.Map.empty) universals in
+                    ( close_locator substitution domain_locator, close substitution domain
+                    , close_abs substitution codomain )
+                | None -> (domain_locator, domain, codomain) in
+            Pi (Vector.map snd universals, domain_locator, domain, eff, codomain) in
+
+        {term; typ; eff = Pure}
 
     | Ast.Term.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {Env.term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
@@ -70,14 +83,14 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             let eff = join_effs (join_effs callee_eff arg_eff) app_eff in
             (match codomain with
             | Exists (existentials, codomain_locator, concr_codo) ->
-                let (env, existentials, _, concr_codo) =
+                let (env, skolems, codomain_locator, concr_codo) =
                     Env.push_abs_skolems env (existentials, codomain_locator, concr_codo) in
                 let (_, _, res_typ) as typ = reabstract env codomain in
                 let {coercion = Cf coerce; residual} = M.coercion expr.pos true env concr_codo typ in
                 M.solve expr.pos env residual;
 
                 let def = {name = Name.fresh (); typ = concr_codo} in
-                { term = {term with v = Unpack (existentials, def, term, coerce {expr with v = Use def})}
+                { term = {term with v = Unpack (skolems, def, term, coerce {expr with v = Use def})}
                 ; typ = res_typ
                 ; eff = Impure }
             | NoE codomain -> {term; typ = codomain; eff})
@@ -180,11 +193,9 @@ and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has
 
 and reabstract env : abs -> ov Vector.t * locator * typ = function
     | Exists (params, locator, body) ->
-        let params' = Vector1.map (fun param -> Env.generate env (freshen param)) params in
-        let substitution = Vector1.fold_left2 (fun substitution (name, _) param' ->
-            Name.Map.add name (OvP param') substitution
-        ) Name.Map.empty params params' in
-        (Vector1.to_vector params', substitute_locator substitution locator, substitute substitution body)
+        let params' = Vector1.map (fun kind -> Env.generate env (Name.fresh (), kind)) params in
+        let substitution = Vector1.map (fun ov -> OvP ov) params' in
+        (Vector1.to_vector params', expose_locator substitution locator, expose substitution body)
     | NoE typ -> (Vector.of_list [], Hole, typ)
 
 and kindcheck env (typ : Ast.Type.t with_pos) =
@@ -198,29 +209,33 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
                 | None -> Name.fresh () in
             let env = Env.push_domain env {name; typ = domain} domain_locator in
 
-            let universals = Vector.map fst universals in
-            (match (eff, kindcheck env codomain) with
-            | (Pure, Exists (existentials, codomain_locator, concr_codo)) ->
-                let existentials' = existentials |> Vector1.map (fun (name, kind) ->
-                    ( Name.freshen name
-                    , Vector.fold_right (fun (_, arg_kind) kind -> ArrowK (arg_kind, kind))
-                                        universals kind )
-                ) in
-                let substitution = Vector1.fold_left2 (fun substitution (name, _) existential ->
-                    let path = Vector.fold_left (fun path arg ->
-                        AppP (path, UseP arg)
-                    ) (UseP existential) universals in
-                    Name.Map.add name path substitution
-                ) Name.Map.empty existentials existentials' in
-                let codomain =
-                    Exists ( existentials', substitute_locator substitution codomain_locator
-                           , substitute substitution concr_codo ) in
-                let (_, codomain_locator, concr_codo) = reabstract env codomain in
-                ( PiL (universals, eff, codomain_locator)
-                , Pi (universals, domain_locator, domain, eff, (NoE concr_codo)) )
-            | (_, codomain) ->
-                ( PiL (universals, eff, Hole)
-                , Pi (universals, domain_locator, domain, eff, codomain) ))
+            let ubs = Vector.map fst universals in
+            let ukinds = Vector.map snd ubs in
+            let (codomain_locator, codomain) =
+                match (eff, kindcheck env codomain) with
+                | (Pure, Exists (existentials, codomain_locator, concr_codo)) ->
+                    let substitution = Vector1.map (fun kind ->
+                        let kind =
+                            Vector.fold_right (fun arg_kind kind -> ArrowK (arg_kind, kind))
+                                              ukinds kind in
+                        let ov = Env.generate env (Name.freshen name, kind) in
+                        Vector.fold_left (fun path arg -> AppP (path, OvP arg)) (OvP ov) universals
+                    ) existentials in
+                    ( expose_locator substitution codomain_locator
+                    , NoE (expose substitution concr_codo) )
+                | (_, codomain) -> (Hole, codomain) in
+
+            (match Vector1.of_vector ubs with
+            | Some universals1 ->
+                let (_, substitution) = Vector1.fold_left (fun (i, substitution) (name, _) ->
+                    (i + 1, Name.Map.add name i substitution)
+                ) (0, Name.Map.empty) universals1 in
+                ( PiL (ukinds, eff, close_locator substitution codomain_locator)
+                , Pi ( ukinds, close_locator substitution domain_locator
+                     , close substitution domain, eff, close_abs substitution codomain ) )
+            | None ->
+                ( PiL (ukinds, eff, codomain_locator)
+                , Pi (ukinds, domain_locator, domain, eff, codomain) ))
 
         | Ast.Type.Sig decls ->
             let env = Env.push_sig env decls in
@@ -230,7 +245,7 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
         | Ast.Type.Path expr ->
             (match typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
-                (match M.focalize typ.pos env proxy_typ (TypeL (UseP (Name.fresh (), TypeK))) with
+                (match M.focalize typ.pos env proxy_typ (TypeL (UvP (Env.uv env (Name.fresh ())))) with
                 | (_, Type typ) ->
                     let (_, locator, typ) = reabstract env typ in
                     (locator, typ)
@@ -257,7 +272,11 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
     let (env, params) = Env.push_existential env in
     let (locator, typ) = elaborate env typ in
     match Vector1.of_list (!params) with
-    | Some params -> Exists (params, locator, typ)
+    | Some params ->
+        let (_, substitution) = Vector1.fold_left (fun (i, substitution) (name, _) ->
+            (i + 1, Name.Map.add name i substitution)
+        ) (0, Name.Map.empty) params in
+        Exists (Vector1.map snd params, close_locator substitution locator, close substitution typ)
     | None -> NoE typ
 
 (* TODO: boolean flags considered harmful *)
@@ -294,7 +313,9 @@ and whnf env typ : bool * FcType.typ * coercion option =
 
     and apply : typ -> typ -> bool * typ * coercion option = fun callee arg ->
         match callee with
-        | Fn (param, body) -> eval (substitute_any (Name.Map.singleton param arg) body)
+        | Fn (param, body) ->
+            let substitution = Vector1.singleton (UvP {contents = Assigned arg}) in (* HACK *)
+            eval (expose substitution body)
         | Ov _ | App _ -> (true, FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with

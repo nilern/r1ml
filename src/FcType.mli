@@ -4,6 +4,8 @@ type kind
     = ArrowK of kind * kind
     | TypeK
 
+type bv = {depth : int; sibli : int}
+
 (* The level of a type variable is the number of skolem-binding scopes in the
    typing environment at its creation site. Kind of like syntactic closures, but
    type inference is (scoping-wise) much simpler than hygienic macroexpansion so
@@ -22,23 +24,24 @@ and uv = uvv ref
 
 (* Existential (or just `t`) *)
 and abs =
-    | Exists of binding Vector1.t * locator * t
+    | Exists of kind Vector1.t * locator * t
     | NoE of t
 
 and t =
-    | Pi of binding Vector.t * locator * t * Effect.t * abs
+    | Pi of kind Vector.t * locator * t * Effect.t * abs (* TODO: use Vector1.t, like `abs` *)
     | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
     | Type of abs
     | Use of binding
+    | Bv of bv
     | Ov of ov
     | Uv of uv
     | Int
     | Bool
 
 and locator =
-    | PiL of binding Vector.t * Effect.t * locator
+    | PiL of kind Vector.t * Effect.t * locator
     | RecordL of locator field Vector.t
     | TypeL of path
     | Hole
@@ -47,9 +50,9 @@ and 'a field = {label : string; typ : 'a}
 
 and path =
     | AppP of path * path
+    | BvP of bv
     | OvP of ov
     | UvP of uv
-    | UseP of binding
 
 and coercion =
     | Refl of typ
@@ -75,8 +78,11 @@ val locator_to_doc : locator -> PPrint.document
 val freshen : binding -> binding
 val sibling : uv -> uv
 
-val substitute_abs : path Name.Map.t -> abs -> abs
-val substitute : path Name.Map.t -> t -> t
-val substitute_any : t Name.Map.t -> t -> t
-val substitute_locator : path Name.Map.t -> locator -> locator
+val expose_abs : path Vector1.t -> abs -> abs
+val expose : path Vector1.t -> t -> t
+val expose_locator : path Vector1.t -> locator -> locator
+
+val close_abs : int Name.Map.t -> abs -> abs
+val close : int Name.Map.t -> t -> t
+val close_locator : int Name.Map.t -> locator -> locator
 

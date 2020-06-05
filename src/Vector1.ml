@@ -2,6 +2,8 @@ type 'a t = 'a Vector.t
 
 let singleton = Vector.singleton
 
+let get = Vector.get
+
 let of_vector vec =
     if Vector.length vec > 0
     then Some vec

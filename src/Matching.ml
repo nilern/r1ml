@@ -105,8 +105,8 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
     | None -> subtype pos occ env typ super_locator super
 
 and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching = match typ with
-    | Exists (skolems, sub_locator, typ) ->
-        let (env, skolems, _, typ) = Env.push_abs_skolems env (skolems, sub_locator, typ) in
+    | Exists (sub_kinds, sub_locator, typ) ->
+        let (env, skolems, sub_locator, typ) = Env.push_abs_skolems env (sub_kinds, sub_locator, typ) in
         (match super with
         | Exists (existentials, super_locator, super) ->
             let (uvs, super_locator, super) =
@@ -181,6 +181,7 @@ and subtype pos occ env typ locator super : coercer matching =
             | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv")
         | _ -> failwith "unreachable: `articulate` on non-uv" in
 
+    (* TODO: Get this on firmer ground, it is quite questionable ATM: *)
     let rec resolve_path typ path = match path with
         | AppP (path, arg) ->
             (match arg with
@@ -195,8 +196,7 @@ and subtype pos occ env typ locator super : coercer matching =
         | OvP ov ->
             (match Env.get_implementation env ov with
             | Some (_, _, uv) -> resolve_path typ (UvP uv)
-            | None -> true)
-        | UseP _ -> failwith "unreachable: UseP in `resolve_path`" in
+            | None -> true) in
 
     let subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, _) ->
@@ -210,13 +210,15 @@ and subtype pos occ env typ locator super : coercer matching =
 
         | ( Pi (universals, domain_locator, domain, eff, codomain)
           , Pi (universals', _, domain', eff', codomain') ) ->
-            let q_codomain_locator = match locator with
-                | PiL (locator_universals, _, codomain_locator) ->
-                    (locator_universals, codomain_locator)
-                | Hole -> (Vector.of_list [], Hole)
+            let codomain_locator = match locator with
+                | PiL (_, _, codomain_locator) -> codomain_locator
+                | Hole -> Hole
                 | _ -> failwith "unreachable: function locator" in
-            let (env, (_, codomain_locator), (universals', domain', eff', codomain')) =
-                Env.push_arrow_skolems env q_codomain_locator (universals', domain', eff', codomain') in
+            let (env, universals', codomain_locator, (domain', eff', codomain')) =
+                match Vector1.of_vector universals' with
+                | Some universals' ->
+                    Env.push_arrow_skolems env universals' codomain_locator (domain', eff', codomain')
+                | None -> (env, Vector.of_list [], codomain_locator, (domain', eff', codomain')) in
             let (uvs, domain_locator, domain, eff, codomain) =
                 C.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 

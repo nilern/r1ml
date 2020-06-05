@@ -2,6 +2,8 @@ type 'a t
 
 val singleton : 'a -> 'a t
 
+val get : 'a t -> int -> 'a
+
 val to_vector : 'a t -> 'a Vector.t
 val of_vector : 'a Vector.t -> 'a t option
 val of_list : 'a list -> 'a t option

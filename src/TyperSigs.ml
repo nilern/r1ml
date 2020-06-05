@@ -9,8 +9,8 @@ type coercer = Env.coercer
 type 'a matching = 'a Env.matching
 
 module type CHECKING = sig
-    val instantiate_abs : Env.t -> binding Vector1.t * locator * typ -> uv Vector1.t * locator * typ
-    val instantiate_arrow : Env.t -> binding Vector.t * locator * typ * Effect.t * abs
+    val instantiate_abs : Env.t -> kind Vector1.t * locator * typ -> uv Vector1.t * locator * typ
+    val instantiate_arrow : Env.t -> kind Vector.t * locator * typ * Effect.t * abs
         -> uv Vector.t * locator * typ * Effect.t * abs
     val whnf : Env.t -> typ -> bool * typ * coercion option
     val typeof : Env.t -> Ast.Term.expr with_pos -> FcTerm.expr with_pos typing
