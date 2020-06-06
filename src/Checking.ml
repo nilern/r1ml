@@ -304,7 +304,7 @@ and whnf env typ =
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
     and apply callee arg = match callee with
-        | Fn (param, body) ->
+        | Fn body ->
             let substitution = Vector.singleton (UvP {contents = Assigned arg}) in (* HACK *)
             eval (expose substitution body)
         | Ov _ | App _ -> Some (FcType.App (callee, arg), None)

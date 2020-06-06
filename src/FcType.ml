@@ -27,7 +27,7 @@ and abs = Exists of kind Vector.t * locator * t
 and t =
     | Pi of kind Vector.t * locator * t * effect * abs
     | Record of t field Vector.t
-    | Fn of Name.t * t
+    | Fn of t
     | App of t * t
     | Type of abs
     | Use of binding
@@ -98,10 +98,9 @@ and to_doc = function
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc (Vector.to_list fields)
-    | Fn (param, body) ->
+    | Fn body ->
         PPrint.prefix 4 1
-            (PPrint.string "fun" ^^ PPrint.blank 1 ^^ Name.to_doc param
-                 ^^ PPrint.blank 1 ^^ PPrint.dot)
+            (PPrint.string "fun" ^^ PPrint.blank 1 ^^ PPrint.dot)
             (to_doc body)
     | App (callee, arg) -> PPrint.group (callee_to_doc callee ^/^ arg_to_doc arg)
     | Type typ -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ abs_to_doc typ)
@@ -247,7 +246,7 @@ and expose' depth substitution = function
         Record (Vector.map (fun {label; typ} ->
                                 {label; typ = expose' depth substitution typ}) fields)
     | Type typ -> Type (expose_abs' depth substitution typ)
-    | Fn (param, body) -> Fn (param, expose' (depth + 1) substitution body)
+    | Fn body -> Fn (expose' (depth + 1) substitution body)
     | App (callee, arg) -> App (expose' depth substitution callee, expose' depth substitution arg)
     | Bv {depth = depth'; sibli} as path ->
         if depth' = depth
@@ -291,7 +290,7 @@ and close' depth substitution = function
         Record (Vector.map (fun {label; typ} ->
                                 {label; typ = close' depth substitution typ}) fields)
     | Type typ -> Type (close_abs' depth substitution typ)
-    | Fn (param, body) -> Fn (param, close' (depth + 1) substitution body)
+    | Fn body -> Fn (close' (depth + 1) substitution body)
     | App (callee, arg) -> App (close' depth substitution callee, close' depth substitution arg)
     | Ov ((name, _), _) as typ ->
         Name.Map.find_opt name substitution

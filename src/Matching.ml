@@ -182,7 +182,7 @@ and subtype pos occ env typ locator super : coercer matching =
     let rec resolve_path typ path = match path with
         | AppP (path, arg) ->
             (match arg with
-            | OvP ((param, _), _) -> resolve_path (FcType.Fn (param, typ)) path
+            | OvP _ -> resolve_path (FcType.Fn typ) path
             | _ -> failwith "unreachable: uv path in locator with non-ov arg")
         | UvP uv ->
             (match !uv with
@@ -418,7 +418,7 @@ and check_uv_assignee pos env uv level typ =
             if level' <= level
             then true
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)
-        | Fn (_, body) -> check_uv_assignee pos env uv level body
+        | Fn body -> check_uv_assignee pos env uv level body
         | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
             then check_uv_assignee pos env uv level domain

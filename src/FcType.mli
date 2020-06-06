@@ -28,7 +28,7 @@ and abs = Exists of kind Vector.t * locator * t
 and t =
     | Pi of kind Vector.t * locator * t * Effect.t * abs
     | Record of t field Vector.t
-    | Fn of Name.t * t
+    | Fn of t
     | App of t * t
     | Type of abs
     | Use of binding
