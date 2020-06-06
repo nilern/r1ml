@@ -4,8 +4,12 @@ open FcType
 
 type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
-type 'a typing = 'a Env.typing
-type coercer = Env.coercer
+type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
+
+(* Newtype to allow ignoring subtyping coercions without partial application warning: *)
+(* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
+         or that duplicate large/nontrivial terms: *)
+type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
 
 module type CHECKING = sig
     val instantiate_abs : Env.t -> kind Vector.t * locator * typ -> uv Vector.t * locator * typ

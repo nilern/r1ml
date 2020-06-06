@@ -37,7 +37,7 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
         | _ -> failwith "unreachable: `articulate_template` on non-uv" in
 
     let focalize_whnf typ = match typ with
-        | Uv {contents = Unassigned _} -> (Env.Cf Fun.id, articulate_template pos typ template)
+        | Uv {contents = Unassigned _} -> (TyperSigs.Cf Fun.id, articulate_template pos typ template)
         | Uv {contents = Assigned _} -> failwith "unreachable: Assigned uv in `focalize`."
         | _ ->
             (match template with
@@ -63,7 +63,7 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
     | Some (typ, coercion) ->
         let (Cf cf as coercer, typ) = focalize_whnf typ in
         ( (match coercion with
-          | Some coercion -> Env.Cf (fun v -> cf {pos; v = Cast (v, coercion)})
+          | Some coercion -> TyperSigs.Cf (fun v -> cf {pos; v = Cast (v, coercion)})
           | None -> coercer)
         , typ )
     | None -> failwith "unreachable: `whnf` failed in `focalize`."
@@ -321,7 +321,7 @@ and subtype pos env typ locator super : coercer matching =
             { coercion =
                 (match (co, co') with
                 | (Some co, Some co') ->
-                    Env.Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
+                    TyperSigs.Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
                 | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
                 | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
                 | (None, None) -> Cf coerce)

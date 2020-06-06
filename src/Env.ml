@@ -2,16 +2,7 @@ open FcType
 open FcTerm
 open TypeError
 
-(* HACK: Declaring these typer util types here: *)
 type 'a with_pos = 'a Ast.with_pos
-
-type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
-
-(* Newtype to allow ignoring subtyping coercions without partial application warning: *)
-(* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
-         or that duplicate large/nontrivial terms: *)
-type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
-(* /HACK *)
 
 type val_binder =
     | WhiteDecl of Name.t Ast.Type.decl

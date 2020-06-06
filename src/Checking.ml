@@ -35,7 +35,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         let (env, universals, domain_locator, domain) = Env.push_domain_skolems env domain in
         let env = Env.push_domain env {name; typ = domain} domain_locator in
         let (env, existentials) = Env.push_existential env in
-        let {Env.term = body; typ = codomain; eff} = typeof env body in
+        let {TyperSigs.term = body; typ = codomain; eff} = typeof env body in
 
         let universals = Vector.map fst universals in
         let (body, codomain) =
@@ -65,7 +65,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         {term; typ; eff = Pure}
 
     | Ast.Term.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
-        let {Env.term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
+        let {TyperSigs.term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
         let name = Name.fresh () in
         let callee = {name; typ = callee_typ} in
         (match M.focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
@@ -73,7 +73,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             let (uvs, _, domain, app_eff, codomain) =
                 instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
             
-            let {Env.term = arg; typ = _; eff = arg_eff} = check env (to_abs domain) arg in
+            let {TyperSigs.term = arg; typ = _; eff = arg_eff} = check env (to_abs domain) arg in
 
             let term =
                 { Ast.pos = callee_expr.pos
@@ -113,7 +113,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         ; eff }
 
     | Ast.Term.Select (record, label) ->
-        let {Env.term = record; typ = record_typ; eff} = typeof env record in
+        let {TyperSigs.term = record; typ = record_typ; eff} = typeof env record in
         let label = Name.to_string label in
         let shape = FcType.RecordL (Vector.singleton {label; typ = Hole}) in
         (match M.focalize record.pos env record_typ shape with
@@ -142,7 +142,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
 
 and field_types env fields =
     let (defs, fields, typs, eff) = Vector.fold_left (fun (defs, fields, typs, eff) field ->
-        let {Env.term = (pos, {name; _}, _) as def; typ; eff = field_eff} = deftype env field in
+        let {TyperSigs.term = (pos, {name; _}, _) as def; typ; eff = field_eff} = deftype env field in
         let label = Name.to_string name in
         ( def :: defs
         , {label; expr = {pos; v = Use name}} :: fields
@@ -157,14 +157,14 @@ and check env (typ : abs) (expr : Ast.Term.expr with_pos) =
 and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
     match expr.v with
     | Ast.Term.If (cond, conseq, alt) ->
-        let {Env.term = cond; typ = _; eff = cond_eff} = check env (to_abs (Prim Bool)) cond in
-        let {Env.term = conseq; typ = _; eff = conseq_eff} = implement env typ conseq in
-        let {Env.term = alt; typ = _; eff = alt_eff} = implement env typ alt in
+        let {TyperSigs.term = cond; typ = _; eff = cond_eff} = check env (to_abs (Prim Bool)) cond in
+        let {TyperSigs.term = conseq; typ = _; eff = conseq_eff} = implement env typ conseq in
+        let {TyperSigs.term = alt; typ = _; eff = alt_eff} = implement env typ alt in
         { term = {expr with v = If (cond, conseq, alt)}
         ; typ = body
         ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
     | _ ->
-        let {Env.term; typ = expr_typ; eff} = typeof env expr in
+        let {TyperSigs.term; typ = expr_typ; eff} = typeof env expr in
         let name = Name.fresh () in
         let lvalue = {name; typ = expr_typ} in
         let Cf coerce = M.solving_coercion expr.pos env expr_typ typ in
@@ -178,7 +178,7 @@ and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has
     let _ = lookup pos env name in
     match Env.get pos env name with
     | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) ->
-        let {Env.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
+        let {TyperSigs.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
         let expr = match coercion with
             | Some coercion -> {expr with v = Cast (expr, coercion)}
             | None -> expr in
@@ -363,7 +363,7 @@ and lookup pos env name =
         | _ -> failwith "unreachable: non-ann from ann `lookup`")
     | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
         binding := Env.GreyDef (lvalue, expr);
-        let {Env.term = expr; typ; eff} = typeof env expr in
+        let {TyperSigs.term = expr; typ; eff} = typeof env expr in
         (match !binding with
         | Env.GreyDef _ ->
             let lvalue = {name; typ} in
