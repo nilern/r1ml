@@ -34,8 +34,7 @@ and t =
     | Bv of bv
     | Ov of ov
     | Uv of uv
-    | Int
-    | Bool
+    | Prim of Prim.t
 
 and locator =
     | PiL of kind Vector.t * effect * locator
@@ -112,8 +111,7 @@ and to_doc = function
             ^^ PPrint.string (Int.to_string sibli)
     | Ov ((name, _), _) -> Name.to_doc name
     | Uv uv -> uv_to_doc uv
-    | Int -> PPrint.string "__int"
-    | Bool -> PPrint.string "__bool"
+    | Prim pt -> Prim.to_doc pt
 
 and domain_to_doc = function
     | (Pi _ | Fn _) as domain -> PPrint.parens (to_doc domain)
@@ -256,7 +254,7 @@ and expose' depth substitution = function
         then of_path (Vector.get substitution sibli) (* OPTIMIZE *)
         else path
     | Uv {contents = Assigned typ} -> expose' depth substitution typ
-    | (Use _ | Ov _ | Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
+    | (Use _ | Ov _ | Uv {contents = Unassigned _} | Prim _) as typ -> typ
 
 let expose_abs = expose_abs' 0
 let expose = expose' 0
@@ -299,7 +297,7 @@ and close' depth substitution = function
         Name.Map.find_opt name substitution
             |> Option.fold ~some: (fun sibli -> Bv {depth; sibli}) ~none: typ
     | Uv {contents = Assigned typ} -> close' depth substitution typ
-    | (Use _ | Bv _ | Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
+    | (Use _ | Bv _ | Uv {contents = Unassigned _} | Prim _) as typ -> typ
 
 let close = close' 0
 let close_locator = close_locator' 0

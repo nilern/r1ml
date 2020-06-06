@@ -133,10 +133,10 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         {term = {expr with v = Use def}; typ; eff = Pure}
 
     | Ast.Term.Const c ->
-        let typ = match c with
-            | Const.Int _ -> Int
-            | Const.Bool _ -> Bool in
-        {term = {expr with v = Const c}; typ; eff = Pure}
+        let pt = match c with
+            | Const.Int _ -> Prim.Int
+            | Const.Bool _ -> Prim.Bool in
+        {term = {expr with v = Const c}; typ = Prim pt; eff = Pure}
 
 and field_types env fields =
     let (defs, fields, typs, eff) = Vector.fold_left (fun (defs, fields, typs, eff) field ->
@@ -155,7 +155,7 @@ and check env (typ : abs) (expr : Ast.Term.expr with_pos) =
 and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
     match expr.v with
     | Ast.Term.If (cond, conseq, alt) ->
-        let {Env.term = cond; typ = _; eff = cond_eff} = check env (to_abs Bool) cond in
+        let {Env.term = cond; typ = _; eff = cond_eff} = check env (to_abs (Prim Bool)) cond in
         let {Env.term = conseq; typ = _; eff = conseq_eff} = implement env typ conseq in
         let {Env.term = alt; typ = _; eff = alt_eff} = implement env typ alt in
         { term = {expr with v = If (cond, conseq, alt)}
@@ -256,8 +256,7 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
             let ov = Env.generate env (Name.fresh (), TypeK) in
             (TypeL (OvP ov), Type (to_abs (Ov ov)))
 
-        | Ast.Type.Int -> (Hole, Int)
-        | Ast.Type.Bool -> (Hole, Bool)
+        | Ast.Type.Prim pt -> (Hole, Prim pt)
 
     and elaborate_decl env {name; typ} =
         let (locator, {name; typ}) = lookup typ.pos env name in
@@ -300,7 +299,7 @@ and whnf env typ =
             (match !uv with
             | Assigned typ -> eval typ
             | Unassigned _ -> Some (typ, None))
-        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> Some (typ, None)
+        | (Pi _ | Record _ | Type _ | Prim _) as typ -> Some (typ, None)
         | Bv _ -> failwith "unreachable: `Bv` in `whnf`"
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
@@ -313,7 +312,7 @@ and whnf env typ =
             (match !uv with
             | Unassigned _ -> None
             | Assigned _ -> failwith "unreachable: Assigned in `apply`.")
-        | Pi _ | Record _ | Type _ | Int | Bool | Bv _ | Use _ ->
+        | Pi _ | Record _ | Type _ | Prim _ | Bv _ | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
     in eval typ
     

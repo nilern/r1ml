@@ -106,8 +106,7 @@ and Type : sig
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
-        | Int
-        | Bool
+        | Prim of Prim.t
 
     and 'a decl = {name : 'a; typ : t with_pos}
 
@@ -119,8 +118,7 @@ end = struct
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
-        | Int
-        | Bool
+        | Prim of Prim.t
 
     and 'a decl = {name : 'a; typ : t with_pos}
 
@@ -134,8 +132,7 @@ end = struct
         | Path expr -> Term.expr_to_doc expr
         | Singleton {v = expr; _} -> PPrint.parens (PPrint.equals ^/^ Term.expr_to_doc expr)
         | Type -> PPrint.string "type"
-        | Int -> PPrint.string "__int"
-        | Bool -> PPrint.string "__bool"
+        | Prim pt -> Prim.to_doc pt
 
     and decl_to_doc {name; typ = {v = typ; _}} =
         PPrint.string "val" ^/^ Name.to_doc name ^/^ PPrint.colon ^/^ to_doc typ

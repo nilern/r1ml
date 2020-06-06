@@ -155,8 +155,7 @@ and subtype pos occ env typ locator super : coercer matching =
                     let typ = Type (to_abs (Uv (sibling uv))) in
                     uv := Assigned typ;
                     typ
-                | Int -> uv := Assigned Int; Int
-                | Bool -> uv := Assigned Bool; Bool
+                | Prim pt -> uv := Assigned (Prim pt); Prim pt
                 | Ov ov ->
                     let typ = Ov ov in
                     uv := Assigned typ;
@@ -287,7 +286,7 @@ and subtype pos occ env typ locator super : coercer matching =
                 | None -> Cf Fun.id)
             ; residual }
 
-        | (Int, Int) | (Bool, Bool) -> {coercion = Cf Fun.id; residual = empty}
+        | (Prim pt, Prim pt') when Prim.eq pt pt' -> {coercion = Cf Fun.id; residual = empty}
 
         | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in subtype_whnf"
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
@@ -394,7 +393,7 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
         if ov = ov'
         then {coercion = None; residual = empty}
         else raise (TypeError (pos, Unify (typ, typ')))
-    | (Int, Int) | (Bool, Bool) -> {coercion = None; residual = empty}
+    | (Prim pt, Prim pt') when Prim.eq pt pt'-> {coercion = None; residual = empty}
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
 and check_uv_assignee_abs pos env uv level (Exists (existentials, _, body) as typ) =
@@ -431,7 +430,7 @@ and check_uv_assignee pos env uv level typ =
         | App (callee, arg) ->
             check_uv_assignee pos env uv level callee
                 && check_uv_assignee pos env uv level arg
-        | Bv _ | Int | Bool -> true
+        | Bv _ | Prim _ -> true
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
 
     match C.whnf env typ with

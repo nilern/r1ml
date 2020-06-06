@@ -35,8 +35,7 @@ and Type : sig
         | Path of Term.expr
         | Singleton of Term.expr with_pos
         | Type
-        | Int
-        | Bool
+        | Prim of Prim.t
 
     and 'a decl = {name : 'a; typ : t with_pos}
 

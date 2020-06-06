@@ -35,8 +35,7 @@ and t =
     | Bv of bv
     | Ov of ov
     | Uv of uv
-    | Int
-    | Bool
+    | Prim of Prim.t
 
 and locator =
     | PiL of kind Vector.t * Effect.t * locator
