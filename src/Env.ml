@@ -87,6 +87,17 @@ let push_skolems {scopes; current_level} bindings =
 let uv {current_level = level; _} binding =
     ref (Unassigned (binding, level))
 
+let instantiate_abs env (existentials, locator, body) =
+    let uvs = Vector.map (fun _ -> uv env (Name.fresh ())) existentials in
+    let substitution = Vector.map (fun uv -> UvP uv) uvs in
+    (uvs, expose_locator substitution locator, expose substitution body)
+
+let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
+    let uvs = Vector.map (fun _ -> uv env (Name.fresh())) universals in
+    let substitution = Vector.map (fun uv -> UvP uv) uvs in
+    ( uvs, expose_locator substitution domain_locator, expose substitution domain, eff
+    , expose_abs substitution codomain )
+
 let push_domain env binding locator =
     {env with scopes = Fn (ref (BlackDecl (binding, locator))) :: env.scopes}
 

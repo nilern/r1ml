@@ -7,17 +7,6 @@ open TypeError
 
 type 'a with_pos = 'a Ast.with_pos
 
-let instantiate_abs env (existentials, locator, body) =
-    let uvs = Vector.map (fun _ -> Env.uv env (Name.fresh ())) existentials in
-    let substitution = Vector.map (fun uv -> UvP uv) uvs in
-    (uvs, expose_locator substitution locator, expose substitution body)
-
-let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
-    let uvs = Vector.map (fun _ -> Env.uv env (Name.fresh())) universals in
-    let substitution = Vector.map (fun uv -> UvP uv) uvs in
-    ( uvs, expose_locator substitution domain_locator, expose substitution domain, eff
-    , expose_abs substitution codomain )
-
 (* # Effects *)
 
 let join_effs eff eff' = match (eff, eff') with
@@ -71,7 +60,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         (match M.focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
         | (Cf coerce, Pi (universals, locator, domain, app_eff, codomain)) ->
             let (uvs, _, domain, app_eff, codomain) =
-                instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
+                Env.instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
             
             let {TyperSigs.term = arg; typ = _; eff = arg_eff} = check env (to_abs domain) arg in
 

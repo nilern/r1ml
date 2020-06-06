@@ -107,7 +107,7 @@ and subtype_abs pos env (typ : abs) locator (super : abs) : coercer matching =
     let (env, skolems, _, typ) = Env.push_abs_skolems env (sub_kinds, sub_locator, typ) in
     let Exists (existentials, super_locator, super) = super in
     let (uvs, super_locator, super) =
-        C.instantiate_abs env (existentials, super_locator, super) in
+        Env.instantiate_abs env (existentials, super_locator, super) in
     match Vector1.of_vector skolems with
     | Some skolems ->
         (match Vector1.of_vector uvs with
@@ -214,7 +214,7 @@ and subtype pos env typ locator super : coercer matching =
                 let (env, universals', codomain_locator, (domain', eff', codomain')) =
                     Env.push_arrow_skolems env universals' codomain_locator (domain', eff', codomain') in
                 let (uvs, domain_locator, domain, eff, codomain) =
-                    C.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
+                    Env.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 
                 let {coercion = Cf coerce_domain; residual = domain_residual} =
                     subtype pos env domain' domain_locator domain in
