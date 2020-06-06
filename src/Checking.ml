@@ -82,7 +82,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
                                                   , Vector.map (fun uv -> Uv uv) uvs, arg )} ) } in
             let eff = join_effs (join_effs callee_eff arg_eff) app_eff in
             let Exists (existentials, codomain_locator, concr_codo) = codomain in
-            let (env, skolems, codomain_locator, concr_codo) =
+            let (env, skolems, _, concr_codo) =
                 Env.push_abs_skolems env (existentials, codomain_locator, concr_codo) in
             (match Vector1.of_vector skolems with
             | Some skolems ->
