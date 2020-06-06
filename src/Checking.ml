@@ -175,7 +175,7 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
 and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup pos env name in
     match Env.get pos env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) -> (* FIXME: use coercion *)
+    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) ->
         let {Env.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
         let expr = match coercion with
             | Some coercion -> {expr with v = Cast (expr, coercion)}
@@ -302,6 +302,7 @@ and whnf env typ : bool * FcType.typ * coercion option =
             | Assigned typ -> eval typ
             | Unassigned _ -> (true, typ, None))
         | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (true, typ, None)
+        | Bv _ -> failwith "unreachable: `Bv` in `whnf`"
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
     and apply : typ -> typ -> bool * typ * coercion option = fun callee arg ->
@@ -314,7 +315,7 @@ and whnf env typ : bool * FcType.typ * coercion option =
             (match !uv with
             | Unassigned _ -> (false, FcType.App (callee, arg), None)
             | Assigned _ -> failwith "unreachable: Assigned in `apply`.")
-        | Pi _ | Record _ | Type _ | Int | Bool | Use _ ->
+        | Pi _ | Record _ | Type _ | Int | Bool | Bv _ | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
     in eval typ
     

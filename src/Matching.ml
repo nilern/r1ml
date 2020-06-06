@@ -194,7 +194,8 @@ and subtype pos occ env typ locator super : coercer matching =
         | OvP ov ->
             (match Env.get_implementation env ov with
             | Some (_, _, uv) -> resolve_path typ (UvP uv)
-            | None -> true) in
+            | None -> true)
+        | BvP _ -> failwith "unreachable: BvP in `resolve_path`" in
 
     let subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, _) ->
@@ -402,7 +403,6 @@ and check_uv_assignee pos env uv level typ =
             then raise (TypeError (pos, Occurs (uv, typ))) (* occurs *)
             else
                 (match !uv' with
-                | Assigned typ -> check_uv_assignee pos env uv level typ
                 | Unassigned (name, level') ->
                     if level' <= level
                     then true
@@ -412,14 +412,11 @@ and check_uv_assignee pos env uv level typ =
             if level' <= level
             then true
             else raise (TypeError (pos, Escape ov)) (* ov would escape *)
-        | Fn (param, body) -> true
-            (* FIXME: check_uv_assignee pos uv level body *)
+        | Fn (_, body) -> check_uv_assignee pos env uv level body
         | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
-            then begin
-                check_uv_assignee pos env uv level domain
-                    && check_uv_assignee_abs pos env uv level codomain
-            end
+            then check_uv_assignee pos env uv level domain
+                && check_uv_assignee_abs pos env uv level codomain
             else raise (TypeError (pos, Polytype (to_abs typ))) (* not a monotype *)
         | Record fields ->
             Vector.for_all (fun {label = _; typ} -> check_uv_assignee pos env uv level typ) fields
@@ -427,7 +424,7 @@ and check_uv_assignee pos env uv level typ =
         | App (callee, arg) ->
             check_uv_assignee pos env uv level callee
                 && check_uv_assignee pos env uv level arg
-        | Int | Bool -> true
+        | Bv _ | Int | Bool -> true
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
 
     match C.whnf env typ with
