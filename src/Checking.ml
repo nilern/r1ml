@@ -87,8 +87,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             (match Vector1.of_vector skolems with
             | Some skolems ->
                 let (_, _, res_typ) as typ = reabstract env codomain in
-                let {coercion = Cf coerce; residual} = M.coercion expr.pos env concr_codo typ in
-                M.solve expr.pos env residual;
+                let Cf coerce = M.solving_coercion expr.pos env concr_codo typ in
                 let name = Name.fresh () in
                 let def = {name; typ = concr_codo} in
                 { term = {term with v = Unpack (skolems, def, term, coerce {expr with v = Use name})}
@@ -168,8 +167,7 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
         let {Env.term; typ = expr_typ; eff} = typeof env expr in
         let name = Name.fresh () in
         let lvalue = {name; typ = expr_typ} in
-        let {coercion = Cf coerce; residual} = M.coercion expr.pos env expr_typ typ in
-        M.solve expr.pos env residual;
+        let Cf coerce = M.solving_coercion expr.pos env expr_typ typ in
         { term = {expr with v = Letrec ( Vector1.singleton (expr.pos, lvalue, term)
                                        , coerce {expr with v = Use name} )}
         ; typ = body; eff}
@@ -336,8 +334,7 @@ and lookup pos env name =
         | Env.BlackDecl ({name = _; typ = typ'} as lvalue, _) ->
             let Exists (existentials, _, body) = typ in
             if Vector.length existentials = 0 then begin
-                let {Env.coercion = _; residual} = M.unify pos env body typ' in
-                M.solve pos env residual;
+                let _ = M.solving_unify pos env body typ' in
                 (Hole, lvalue)
             end else raise (TypeError (pos, PolytypeInference typ))
         | _ -> failwith "unreachable: non-decl from decl `lookup`")
@@ -359,8 +356,7 @@ and lookup pos env name =
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, locator, None) ->
             let Exists (existentials', _, body) = typ in
             if Vector.length existentials' = 0 then begin
-                let {Env.coercion = co; residual} = M.unify pos env body typ' in
-                M.solve pos env residual;
+                let co = M.solving_unify pos env body typ' in
                 binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
                 (Hole, lvalue)
             end else raise (TypeError (pos, PolytypeInference typ))
@@ -374,8 +370,7 @@ and lookup pos env name =
             binding := Env.BlackUnn (lvalue, expr, eff);
             (Hole, lvalue)
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
-            let {coercion = Cf coerce; residual} = M.subtype expr.pos env typ Hole typ' in
-            M.solve pos env residual;
+            let Cf coerce = M.solving_subtype expr.pos env typ Hole typ' in
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             (Hole, lvalue)
         | _ -> failwith "unreachable: non-unn from unn `lookup`")

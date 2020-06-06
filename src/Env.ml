@@ -11,8 +11,6 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
 (* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
-
-type 'a matching = {coercion : 'a; residual : Residual.t option}
 (* /HACK *)
 
 type val_binder =

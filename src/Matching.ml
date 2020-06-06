@@ -15,7 +15,7 @@ open FcTerm
 open TypeError
 
 type coercer = TyperSigs.coercer
-type 'a matching = 'a TyperSigs.matching
+type 'a matching = {coercion : 'a; residual : Residual.t option}
 
 (* # Focalization *)
 
@@ -277,8 +277,8 @@ and subtype pos env typ locator super : coercer matching =
                     else raise (TypeError (pos, Polytype carrie))
 
                 | Hole -> (* TODO: Use unification (?) *)
-                    let {Env.coercion = _; residual} = subtype_abs pos env carrie Hole carrie' in
-                    let {Env.coercion = _; residual = residual'} = subtype_abs pos env carrie Hole carrie' in
+                    let {coercion = _; residual} = subtype_abs pos env carrie Hole carrie' in
+                    let {coercion = _; residual = residual'} = subtype_abs pos env carrie Hole carrie' in
                     { coercion = Cf (fun _ -> {v = Proxy carrie'; pos})
                     ; residual = combine residual residual' }
 
@@ -287,7 +287,7 @@ and subtype pos env typ locator super : coercer matching =
 
         | (App _, _) -> (match super with
             | App _ ->
-                let {Env.coercion; residual} = unify_whnf pos env typ super in
+                let {coercion; residual} = unify_whnf pos env typ super in
                 { coercion =
                     (match coercion with
                     | Some co -> Cf (fun v -> {pos; v = Cast (v, co)})
@@ -297,7 +297,7 @@ and subtype pos env typ locator super : coercer matching =
 
         | (Ov _, _) -> (match super with
             | Ov _ ->
-                let {Env.coercion; residual} = unify_whnf pos env typ super in
+                let {coercion; residual} = unify_whnf pos env typ super in
                 { coercion =
                     (match coercion with
                     | Some co -> Cf (fun v -> {pos; v = Cast (v, co)})
@@ -318,7 +318,7 @@ and subtype pos env typ locator super : coercer matching =
         C.whnf env typ >>= fun (typ', co) ->
         C.whnf env super |> Option.map (fun (super', co') ->
             let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
-            { Env.coercion =
+            { coercion =
                 (match (co, co') with
                 | (Some co, Some co') ->
                     Env.Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
@@ -347,8 +347,8 @@ and unify pos env typ typ' : coercion option matching =
     let res =
         C.whnf env typ >>= fun (typ, co) ->
         C.whnf env typ' |> Option.map (fun (typ', co'') ->
-        let {Env.coercion = co'; residual} = unify_whnf pos env typ typ' in
-        { Env.coercion =
+        let {coercion = co'; residual} = unify_whnf pos env typ typ' in
+        { coercion =
             (match (co, co', co'') with
             | (Some co, Some co', Some co'') -> Some (Trans (Trans (co, co'), Symm co''))
             | (Some co, Some co', None) -> Some (Trans (co, co'))
@@ -384,7 +384,7 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
 
     | (Type carrie, _) -> (match typ' with
         | Type carrie' -> 
-            let {Env.coercion; residual} = unify_abs pos env carrie carrie' in
+            let {coercion; residual} = unify_abs pos env carrie carrie' in
             { coercion =
                 (match coercion with
                 | Some co -> Some (TypeCo co)
@@ -394,8 +394,8 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
 
     | (FcType.App (callee, arg), _) -> (match typ' with
         | FcType.App (callee', arg') ->
-            let {Env.coercion = callee_co; residual} = unify_whnf pos env callee callee' in
-            let {Env.coercion = arg_co; residual = residual'} = unify pos env arg arg' in
+            let {coercion = callee_co; residual} = unify_whnf pos env callee callee' in
+            let {coercion = arg_co; residual = residual'} = unify pos env arg arg' in
             { coercion =
                 (match (callee_co, arg_co) with
                 | (Some callee_co, Some arg_co) -> Some (Comp (callee_co, arg_co))
@@ -482,12 +482,30 @@ and solve pos env residual =
             residual
 
         | Unify (typ, typ', patchable) ->
-            let {Env.coercion; residual} = unify pos env typ typ' in
+            let {coercion; residual} = unify pos env typ typ' in
             Option.iter (fun coercion -> patchable := coercion) coercion;
             residual
     in
     (match Option.bind residual (solve env) with
     | None -> ()
     | Some residual -> raise (TypeError (pos, Unsolvable residual)))
+
+(* Public API *)
+
+let solving_coercion pos env typ super =
+    let {coercion; residual} = coercion pos env typ super in
+    solve pos env residual;
+    coercion
+
+let solving_subtype pos env typ locator super =
+    let {coercion; residual} = subtype pos env typ locator super in
+    solve pos env residual;
+    coercion
+
+let solving_unify pos env typ super =
+    let {coercion; residual} = unify pos env typ super in
+    solve pos env residual;
+    coercion
+
 end
 
