@@ -20,9 +20,9 @@ type uvv =
     | Unassigned of Name.t * level
     | Assigned of typ
 
+(* TODO: Union-Find: *)
 and uv = uvv ref
 
-(* Existential (or just `t`) *)
 and abs = Exists of kind Vector.t * locator * t
 
 and t =

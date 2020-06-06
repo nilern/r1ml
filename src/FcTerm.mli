@@ -20,7 +20,7 @@ type expr
     | Record of field Vector.t
     | Select of expr with_pos * string
     | Proxy of abs 
-    | Use of lvalue
+    | Use of Name.t
     | Const of Const.t
     | Patchable of expr with_pos ref
 
@@ -37,5 +37,6 @@ val expr_to_doc : expr -> PPrint.document
 val def_to_doc : def -> PPrint.document
 val stmt_to_doc : stmt -> PPrint.document
 
+(* TODO: Add more of these: *)
 val letrec : def Vector.t -> expr with_pos -> expr
 

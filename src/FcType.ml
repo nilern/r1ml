@@ -1,5 +1,3 @@
-module IntMap = Map.Make(Int) (* HACK *)
-
 module Effect = Ast.Effect
 
 type kind

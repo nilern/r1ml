@@ -66,7 +66,8 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
 
     | Ast.Term.App (callee, arg) -> (* TODO: Support "dynamic" sealing of `if`-arg? *)
         let {Env.term = callee_expr; typ = callee_typ; eff = callee_eff} = typeof env callee in
-        let callee = {name = Name.fresh (); typ = callee_typ} in
+        let name = Name.fresh () in
+        let callee = {name; typ = callee_typ} in
         (match M.focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
         | (Cf coerce, Pi (universals, locator, domain, app_eff, codomain)) ->
             let (uvs, _, domain, app_eff, codomain) =
@@ -77,7 +78,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             let term =
                 { Ast.pos = callee_expr.pos
                 ; v = Letrec ( Vector1.singleton (callee_expr.pos, callee, callee_expr)
-                             , {expr with v = App ( coerce {expr with v = Use callee}
+                             , {expr with v = App ( coerce {expr with v = Use name}
                                                   , Vector.map (fun uv -> Uv uv) uvs, arg )} ) } in
             let eff = join_effs (join_effs callee_eff arg_eff) app_eff in
             let Exists (existentials, codomain_locator, concr_codo) = codomain in
@@ -88,8 +89,9 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
                 let (_, _, res_typ) as typ = reabstract env codomain in
                 let {coercion = Cf coerce; residual} = M.coercion expr.pos true env concr_codo typ in
                 M.solve expr.pos env residual;
-                let def = {name = Name.fresh (); typ = concr_codo} in
-                { term = {term with v = Unpack (skolems, def, term, coerce {expr with v = Use def})}
+                let name = Name.fresh () in
+                let def = {name; typ = concr_codo} in
+                { term = {term with v = Unpack (skolems, def, term, coerce {expr with v = Use name})}
                 ; typ = res_typ
                 ; eff = Impure }
             | None -> {term; typ = concr_codo; eff})
@@ -118,9 +120,10 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         (match M.focalize record.pos env record_typ shape with
         | (Cf coerce, Record fields) ->
             let {label = _; typ} = Vector.get fields 0 in
-            let selectee = {name = Name.fresh (); typ = record_typ} in
+            let name = Name.fresh () in
+            let selectee = {name; typ = record_typ} in
             { term = {expr with v = Letrec ( Vector1.singleton (record.pos, selectee, record)
-                                           , {expr with v = Select (coerce {expr with v = Use selectee}, label)} )}
+                                           , {expr with v = Select (coerce {expr with v = Use name}, label)} )}
             ; typ; eff}
         | _ -> failwith "unreachable: selectee focalization returned non-record")
 
@@ -129,8 +132,8 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         {term = {expr with v = Proxy typ}; typ = Type typ; eff = Pure}
 
     | Ast.Term.Use name ->
-        let (_, ({name = _; typ} as def)) = lookup expr.pos env name in
-        {term = {expr with v = Use def}; typ; eff = Pure}
+        let (_, {name; typ}) = lookup expr.pos env name in
+        {term = {expr with v = Use name}; typ; eff = Pure}
 
     | Ast.Term.Const c ->
         let pt = match c with
@@ -140,10 +143,10 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
 
 and field_types env fields =
     let (defs, fields, typs, eff) = Vector.fold_left (fun (defs, fields, typs, eff) field ->
-        let {Env.term = (pos, ({name; _} as lvalue), _) as def; typ; eff = field_eff} = deftype env field in
+        let {Env.term = (pos, {name; _}, _) as def; typ; eff = field_eff} = deftype env field in
         let label = Name.to_string name in
         ( def :: defs
-        , {label; expr = {pos; v = Use lvalue}} :: fields
+        , {label; expr = {pos; v = Use name}} :: fields
         , {label; typ} :: typs
         , join_effs eff field_eff )
     ) ([], [], [], Pure) fields in
@@ -163,11 +166,12 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
         ; eff = join_effs cond_eff (join_effs conseq_eff alt_eff) }
     | _ ->
         let {Env.term; typ = expr_typ; eff} = typeof env expr in
-        let lvalue = {name = Name.fresh (); typ = expr_typ} in
+        let name = Name.fresh () in
+        let lvalue = {name; typ = expr_typ} in
         let {coercion = Cf coerce; residual} = M.coercion expr.pos true env expr_typ typ in
         M.solve expr.pos env residual;
         { term = {expr with v = Letrec ( Vector1.singleton (expr.pos, lvalue, term)
-                                       , coerce {expr with v = Use lvalue} )}
+                                       , coerce {expr with v = Use name} )}
         ; typ = body; eff}
 
 (* # Definitions and Statements *)

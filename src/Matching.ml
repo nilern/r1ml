@@ -116,16 +116,18 @@ and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer
         | Some uvs ->
             let {coercion = Cf coerce; residual} = subtype pos occ env typ super_locator super in
 
-            let impl = {name = Name.fresh (); typ} in
+            let name = Name.fresh () in
+            let impl = {name; typ} in
             let uvs = Vector1.map (fun uv -> Uv uv) uvs in
-            let body = {Ast.pos; v = Pack (uvs, coerce {Ast.pos; v = Use impl})} in
+            let body = {Ast.pos; v = Pack (uvs, coerce {Ast.pos; v = Use name})} in
             { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
             ; residual = ResidualMonoid.skolemized skolems residual }
         | None ->
             let {coercion = Cf coerce; residual} = subtype pos occ env typ locator super in
 
-            let impl = {name = Name.fresh (); typ} in
-            let body = coerce {Ast.pos; v = Use impl} in
+            let name = Name.fresh () in 
+            let impl = {name; typ} in
+            let body = coerce {Ast.pos; v = Use name} in
             { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
             ; residual = ResidualMonoid.skolemized skolems residual })
 
@@ -224,8 +226,9 @@ and subtype pos occ env typ locator super : coercer matching =
             let {coercion = Cf coerce_codomain; residual = codomain_residual} =
                 subtype_abs pos occ env codomain codomain_locator codomain' in
 
-            let param = {name = Name.fresh (); typ = domain'} in
-            let arg = coerce_domain {pos; v = Use param} in
+            let name = Name.fresh () in
+            let param = {name; typ = domain'} in
+            let arg = coerce_domain {pos; v = Use name} in
             let arrows_residual = combine domain_residual codomain_residual in
             { coercion =
                 Cf (fun v ->
@@ -241,7 +244,8 @@ and subtype pos occ env typ locator super : coercer matching =
                 | RecordL fields -> fields
                 | Hole -> Vector.of_list []
                 | _ -> failwith "unreachable: record locator" in
-            let selectee = {name = Name.fresh (); typ = typ} in
+            let name = Name.fresh () in
+            let selectee = {name; typ = typ} in
             let (fields, residual) = Vector.fold_left (fun (fields', residual) {label; typ = super} ->
                 match Vector.find_opt (fun {label = label'; typ = _} -> label' = label) fields with
                 | Some {label = _; typ} ->
@@ -250,7 +254,7 @@ and subtype pos occ env typ locator super : coercer matching =
                         | Some {label = _; typ = locator} -> locator
                         | None -> Hole in
                     let {coercion = Cf coerce; residual = field_residual} = subtype pos occ env typ locator super in
-                    ( {label; expr = coerce {pos; v = Select ({pos; v = Use selectee}, label)}} :: fields'
+                    ( {label; expr = coerce {pos; v = Select ({pos; v = Use name}, label)}} :: fields'
                     , combine residual field_residual )
                 | None -> raise (TypeError (pos, MissingField (typ, label)))
             ) ([], empty) super_fields in

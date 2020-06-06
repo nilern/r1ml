@@ -20,7 +20,7 @@ type expr
     | Record of field Vector.t
     | Select of expr with_pos * string
     | Proxy of abs 
-    | Use of lvalue
+    | Use of Name.t
     | Const of Const.t
     | Patchable of expr with_pos ref
 
@@ -105,7 +105,7 @@ let rec expr_to_doc = function
     | Select (record, label) ->
         PPrint.prefix 4 0 (selectee_to_doc record.v) (PPrint.dot ^^ PPrint.string label)
     | Proxy typ -> PPrint.brackets (Type.abs_to_doc typ)
-    | Use {name; _} -> Name.to_doc name
+    | Use name -> Name.to_doc name
     | Const c -> Const.to_doc c
     | Patchable {contents} -> expr_to_doc contents.v
 
