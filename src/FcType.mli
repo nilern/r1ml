@@ -23,12 +23,10 @@ type uvv =
 and uv = uvv ref
 
 (* Existential (or just `t`) *)
-and abs =
-    | Exists of kind Vector1.t * locator * t
-    | NoE of t
+and abs = Exists of kind Vector.t * locator * t
 
 and t =
-    | Pi of kind Vector.t * locator * t * Effect.t * abs (* TODO: use Vector1.t, like `abs` *)
+    | Pi of kind Vector.t * locator * t * Effect.t * abs
     | Record of t field Vector.t
     | Fn of Name.t * t
     | App of t * t
@@ -75,12 +73,14 @@ val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document
 
+val to_abs : t -> abs
+
 val freshen : binding -> binding
 val sibling : uv -> uv
 
-val expose_abs : path Vector1.t -> abs -> abs
-val expose : path Vector1.t -> t -> t
-val expose_locator : path Vector1.t -> locator -> locator
+val expose_abs : path Vector.t -> abs -> abs
+val expose : path Vector.t -> t -> t
+val expose_locator : path Vector.t -> locator -> locator
 
 val close_abs : int Name.Map.t -> abs -> abs
 val close : int Name.Map.t -> t -> t

@@ -26,11 +26,11 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
             | {contents = Unassigned _} ->
                 (match template with
                 | PiL _ ->
-                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
+                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (to_abs (Uv (sibling uv)))) in
                     uv := Assigned typ;
                     typ
                 | TypeL _ ->
-                    let typ = Type (NoE (Uv (sibling uv))) in
+                    let typ = Type (to_abs (Uv (sibling uv))) in
                     uv := Assigned typ;
                     typ
                 | RecordL _ -> raise (TypeError (pos, RecordArticulationL template)) (* no can do without row typing *)
@@ -104,23 +104,24 @@ and coercion pos (occ : bool) env (typ : FcType.typ) ((existentials, super_locat
         ; residual = Option.map (fun residual -> Residual.Axioms (axiom_bindings, residual)) residual }
     | None -> subtype pos occ env typ super_locator super
 
-and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching = match typ with
-    | Exists (sub_kinds, sub_locator, typ) ->
-        let (env, skolems, sub_locator, typ) = Env.push_abs_skolems env (sub_kinds, sub_locator, typ) in
-        (match super with
-        | Exists (existentials, super_locator, super) ->
-            let (uvs, super_locator, super) =
-                C.instantiate_abs env (existentials, super_locator, super) in
-
-            let {coercion = Cf coerce; residual} =
-                subtype pos occ env typ super_locator super in
+and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer matching =
+    let Exists (sub_kinds, sub_locator, typ) = typ in
+    let (env, skolems, sub_locator, typ) = Env.push_abs_skolems env (sub_kinds, sub_locator, typ) in
+    let Exists (existentials, super_locator, super) = super in
+    let (uvs, super_locator, super) =
+        C.instantiate_abs env (existentials, super_locator, super) in
+    match Vector1.of_vector skolems with
+    | Some skolems ->
+        (match Vector1.of_vector uvs with
+        | Some uvs ->
+            let {coercion = Cf coerce; residual} = subtype pos occ env typ super_locator super in
 
             let impl = {name = Name.fresh (); typ} in
-            let body = {Ast.pos; v = Pack ( Vector1.map (fun uv -> Uv uv) uvs
-                                          , coerce {Ast.pos; v = Use impl} )} in
+            let uvs = Vector1.map (fun uv -> Uv uv) uvs in
+            let body = {Ast.pos; v = Pack (uvs, coerce {Ast.pos; v = Use impl})} in
             { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
             ; residual = ResidualMonoid.skolemized skolems residual }
-        | NoE super ->
+        | None ->
             let {coercion = Cf coerce; residual} = subtype pos occ env typ locator super in
 
             let impl = {name = Name.fresh (); typ} in
@@ -128,17 +129,14 @@ and subtype_abs pos (occ : bool) env (typ : abs) locator (super : abs) : coercer
             { coercion = Cf (fun v -> {pos; v = Unpack (skolems, impl, v, body)})
             ; residual = ResidualMonoid.skolemized skolems residual })
 
-    | NoE typ ->
-        (match super with
-        | Exists (existentials, super_locator, super) ->
-            let (uvs, super_locator, super) =
-                C.instantiate_abs env (existentials, super_locator, super) in
-
+    | None ->
+        (match Vector1.of_vector uvs with
+        | Some uvs ->
             let {coercion = Cf coerce; residual} = subtype pos occ env typ super_locator super in
 
             let uvs = Vector1.map (fun uv -> Uv uv) uvs in
             {coercion = Cf (fun v -> {pos; v = Pack (uvs, coerce v)}); residual}
-        | NoE super -> subtype pos occ env typ locator super)
+        | None -> subtype pos occ env typ locator super)
 
 and subtype pos occ env typ locator super : coercer matching =
     let empty = ResidualMonoid.empty in
@@ -150,11 +148,11 @@ and subtype pos occ env typ locator super : coercer matching =
             | {contents = Unassigned (_, level)} ->
                 (match template with
                 | Pi _ ->
-                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (NoE (Uv (sibling uv)))) in
+                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (to_abs (Uv (sibling uv)))) in
                     uv := Assigned typ;
                     typ
                 | Type _ ->
-                    let typ = Type (NoE (Uv (sibling uv))) in
+                    let typ = Type (to_abs (Uv (sibling uv))) in
                     uv := Assigned typ;
                     typ
                 | Int -> uv := Assigned Int; Int
@@ -215,10 +213,7 @@ and subtype pos occ env typ locator super : coercer matching =
                 | Hole -> Hole
                 | _ -> failwith "unreachable: function locator" in
             let (env, universals', codomain_locator, (domain', eff', codomain')) =
-                match Vector1.of_vector universals' with
-                | Some universals' ->
-                    Env.push_arrow_skolems env universals' codomain_locator (domain', eff', codomain')
-                | None -> (env, Vector.of_list [], codomain_locator, (domain', eff', codomain')) in
+                Env.push_arrow_skolems env universals' codomain_locator (domain', eff', codomain') in
             let (uvs, domain_locator, domain, eff, codomain) =
                 C.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
 
@@ -266,13 +261,13 @@ and subtype pos occ env typ locator super : coercer matching =
         | (Type carrie, Type carrie') ->
             (match locator with
             | TypeL path ->
-                (match carrie with
-                | NoE impl ->
+                let Exists (existentials, _, impl) = carrie in
+                if Vector.length existentials = 0 then begin
                     let (decidable, impl, _) = C.whnf env impl in
                     if decidable && resolve_path impl path
                     then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
                     else failwith "todo"
-                | Exists _ -> raise (TypeError (pos, Polytype carrie)))
+                end else raise (TypeError (pos, Polytype carrie))
             | Hole -> (* TODO: Use unification (?) *)
                 let {Env.coercion = _; residual} = subtype_abs pos occ env carrie Hole carrie' in
                 let {Env.coercion = _; residual = residual'} = subtype_abs pos occ env carrie Hole carrie' in
@@ -316,8 +311,10 @@ and subtype pos occ env typ locator super : coercer matching =
 
 (* # Unification *)
 
-and unify_abs pos env typ typ' : coercion option matching = match (typ, typ') with
-    | (NoE typ, NoE typ') -> unify pos env typ typ'
+and unify_abs pos env (Exists (existentials, locator, body)) (Exists (existentials', locator', body')) =
+    if Vector.length existentials = 0 && Vector.length existentials' = 0
+    then unify pos env body body'
+    else failwith "todo"
 
 and unify pos env typ typ' : coercion option matching =
     let (decidable, typ, co) = C.whnf env typ in
@@ -392,9 +389,10 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Int, Int) | (Bool, Bool) -> {coercion = None; residual = empty}
     | (Fn _, _) | (_, Fn _) -> failwith "unreachable: Fn in unify_whnf"
 
-and check_uv_assignee_abs pos env uv level : FcTerm.abs -> bool = function
-    | NoE typ -> check_uv_assignee pos env uv level typ
-    | Exists _ as typ -> raise (TypeError (pos, Polytype typ)) (* not a monotype *)
+and check_uv_assignee_abs pos env uv level (Exists (existentials, _, body) as typ) =
+    if Vector.length existentials = 0
+    then check_uv_assignee pos env uv level body
+    else raise (TypeError (pos, Polytype typ)) (* not a monotype *)
 
 (* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
 and check_uv_assignee pos env uv level typ =
@@ -422,7 +420,7 @@ and check_uv_assignee pos env uv level typ =
                 check_uv_assignee pos env uv level domain
                     && check_uv_assignee_abs pos env uv level codomain
             end
-            else raise (TypeError (pos, Polytype (NoE typ))) (* not a monotype *)
+            else raise (TypeError (pos, Polytype (to_abs typ))) (* not a monotype *)
         | Record fields ->
             Vector.for_all (fun {label = _; typ} -> check_uv_assignee pos env uv level typ) fields
         | Type carrie -> check_uv_assignee_abs pos env uv level carrie

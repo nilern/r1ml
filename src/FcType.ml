@@ -22,9 +22,7 @@ type uvv =
 
 and uv = uvv ref
 
-and abs =
-    | Exists of kind Vector1.t * locator * t
-    | NoE of t
+and abs = Exists of kind Vector.t * locator * t
 
 and t =
     | Pi of kind Vector.t * locator * t * effect * abs
@@ -81,12 +79,12 @@ and domain_kind_to_doc domain = match domain with
 
 let kinds_to_doc kinds = PPrint.separate_map (PPrint.break 1) kind_to_doc kinds
 
-let rec abs_to_doc : abs -> PPrint.document = function
-    | Exists (params, locator, body) ->
-        PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ kinds_to_doc (Vector1.to_list params)))
+let rec abs_to_doc (Exists (params, locator, body)) =
+    if Vector.length params > 0 then
+        PPrint.prefix 4 1 (PPrint.group (PPrint.string "exists" ^/^ kinds_to_doc (Vector.to_list params)))
             (PPrint.dot ^^ PPrint.blank 1
                 ^^ PPrint.parens (locator_to_doc locator ^^ PPrint.comma ^/^ to_doc body))
-    | NoE typ -> to_doc typ
+    else to_doc body
 
 and to_doc = function
     | Pi (universals, locator, domain, eff, codomain) ->
@@ -183,6 +181,8 @@ and of_path = function
         | Unassigned _ -> Uv uv)
     | OvP ov -> Ov ov
 
+let to_abs typ = Exists (Vector.of_list [], Hole, typ)
+
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
     | Symm co -> PPrint.string "symm" ^^ PPrint.blank 1 ^^ coercion_to_doc co
@@ -222,13 +222,13 @@ let rec expose_path' depth substitution = function
         AppP (expose_path' depth substitution callee, expose_path' depth substitution arg)
     | BvP {depth = depth'; sibli} as path ->
         if depth' = depth
-        then Vector1.get substitution sibli
+        then Vector.get substitution sibli
         else path
     | (OvP _ | UvP _) as path -> path
 
 let rec expose_locator' depth substitution = function
     | PiL (params, eff, codomain) ->
-        let depth = if Vector.length params > 0 then depth + 1 else depth in
+        let depth = depth + 1 in
         PiL (params, eff, expose_locator' depth substitution codomain)
     | RecordL fields ->
         RecordL (Vector.map (fun {label; typ} ->
@@ -236,14 +236,13 @@ let rec expose_locator' depth substitution = function
     | TypeL path -> TypeL (expose_path' depth substitution path)
     | Hole -> Hole
 
-let rec expose_abs' depth substitution = function
-    | Exists (params, locator, body) ->
-        Exists (params, expose_locator' depth substitution locator, expose' depth substitution body)
-    | NoE typ -> NoE (expose' depth substitution typ)
+let rec expose_abs' depth substitution (Exists (params, locator, body)) =
+    let depth = depth + 1 in
+    Exists (params, expose_locator' depth substitution locator, expose' depth substitution body)
 
 and expose' depth substitution = function
     | Pi (params, locator, domain, eff, codomain) ->
-        let depth = if Vector.length params > 0 then depth + 1 else depth in
+        let depth = depth + 1 in
         Pi ( params, expose_locator' depth substitution locator, expose' depth substitution domain
            , eff, expose_abs' depth substitution codomain )
     | Record fields ->
@@ -254,7 +253,7 @@ and expose' depth substitution = function
     | App (callee, arg) -> App (expose' depth substitution callee, expose' depth substitution arg)
     | Bv {depth = depth'; sibli} as path ->
         if depth' = depth
-        then of_path (Vector1.get substitution sibli) (* OPTIMIZE *)
+        then of_path (Vector.get substitution sibli) (* OPTIMIZE *)
         else path
     | Uv {contents = Assigned typ} -> expose' depth substitution typ
     | (Use _ | Ov _ | Uv {contents = Unassigned _} | Int | Bool) as typ -> typ
@@ -273,7 +272,7 @@ let rec close_path' depth substitution = function
 
 let rec close_locator' depth substitution = function
     | PiL (params, eff, codomain) ->
-        let depth = if Vector.length params > 0 then depth + 1 else depth in
+        let depth = depth + 1 in
         PiL (params, eff, close_locator' depth substitution codomain)
     | RecordL fields ->
         RecordL (Vector.map (fun {label; typ} ->
@@ -281,14 +280,13 @@ let rec close_locator' depth substitution = function
     | TypeL path -> TypeL (close_path' depth substitution path)
     | Hole -> Hole
 
-let rec close_abs' depth substitution = function
-    | Exists (params, locator, body) ->
-        Exists (params, close_locator' depth substitution locator, close' depth substitution body)
-    | NoE typ -> NoE (close' depth substitution typ)
+let rec close_abs' depth substitution (Exists (params, locator, body)) =
+    let depth = depth + 1 in
+    Exists (params, close_locator' depth substitution locator, close' depth substitution body)
 
 and close' depth substitution = function
     | Pi (params, locator, domain, eff, codomain) ->
-        let depth = if Vector.length params > 0 then depth + 1 else depth in
+        let depth = depth + 1 in
         Pi ( params, close_locator' depth substitution locator, close' depth substitution domain
            , eff, close_abs' depth substitution codomain )
     | Record fields ->

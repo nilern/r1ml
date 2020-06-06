@@ -64,32 +64,29 @@ let generate env binding =
         | [] -> failwith "Typer.Env.generate: missing root Existential scope"
     in generate env.scopes
 
-let push_domain_skolems ({scopes; current_level} as env) = function
-    | Exists (existentials, locator, domain) ->
-        let level = current_level + 1 in
-        let skolems = Vector1.map (fun kind -> ((Name.fresh (), kind), level)) existentials in
-        let substitution = Vector1.map (fun ov -> OvP ov) skolems in
-        let skolems = Vector1.to_vector skolems in
-        ( {scopes = Universal skolems :: scopes; current_level = level}
-        , skolems, expose_locator substitution locator, expose substitution domain )
-    | NoE domain -> (env, Vector.of_list [], Hole, domain)
+let push_domain_skolems {scopes; current_level} (Exists (existentials, locator, domain)) =
+    let level = current_level + 1 in
+    let skolems = Vector.map (fun kind -> ((Name.fresh (), kind), level)) existentials in
+    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    ( {scopes = Universal skolems :: scopes; current_level = level}
+    , skolems, expose_locator substitution locator, expose substitution domain )
 
 let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
     let level = current_level + 1 in
-    let ebs = Vector1.map (fun kind -> (Name.fresh (), kind)) existentials in
-    let skolems = Vector1.map (fun binding -> (binding, level)) ebs in
-    let substitution = Vector1.map (fun ov -> OvP ov) skolems in
-    ( { scopes = Universal (Vector1.to_vector skolems) :: scopes (* HACK: Universal *)
+    let ebs = Vector.map (fun kind -> (Name.fresh (), kind)) existentials in
+    let skolems = Vector.map (fun binding -> (binding, level)) ebs in
+    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    ( { scopes = Universal skolems :: scopes (* HACK: Universal *)
       ; current_level = level }
     , ebs, expose_locator substitution locator, expose substitution body )
 
 let push_arrow_skolems {scopes; current_level} universals codomain_locator (domain, eff, codomain) =
     let level = current_level + 1 in
-    let ubs = Vector1.map (fun kind -> (Name.fresh (), kind)) universals in
-    let skolems = Vector1.map (fun binding -> (binding, level)) ubs in
-    let substitution = Vector1.map (fun ov -> OvP ov) skolems in
-    ( {scopes = Universal (Vector1.to_vector skolems) :: scopes; current_level = level}
-    , Vector1.to_vector ubs
+    let ubs = Vector.map (fun kind -> (Name.fresh (), kind)) universals in
+    let skolems = Vector.map (fun binding -> (binding, level)) ubs in
+    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    ( {scopes = Universal skolems :: scopes; current_level = level}
+    , ubs
     , expose_locator substitution codomain_locator
     , (expose substitution domain, eff, expose_abs substitution codomain) )
 
