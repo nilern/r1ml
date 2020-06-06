@@ -62,13 +62,13 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
             | Hole -> failwith "unreachable: Hole as template in `focalize`.") in
 
     match C.whnf env typ with
-    | (true, typ, coercion) ->
+    | Some (typ, coercion) ->
         let (Cf cf as coercer, typ) = focalize_whnf typ in
         ( (match coercion with
           | Some coercion -> Env.Cf (fun v -> cf {pos; v = Cast (v, coercion)})
           | None -> coercer)
         , typ )
-    | (false, _, _) -> failwith "unreachable: `whnf` failed in `focalize`."
+    | None -> failwith "unreachable: `whnf` failed in `focalize`."
 
 (* # Subtyping *)
 
@@ -264,12 +264,14 @@ and subtype pos occ env typ locator super : coercer matching =
             (match locator with
             | TypeL path ->
                 let Exists (existentials, _, impl) = carrie in
-                if Vector.length existentials = 0 then begin
-                    let (decidable, impl, _) = C.whnf env impl in
-                    if decidable && resolve_path impl path
-                    then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
-                    else raise (TypeError (pos, Unresolvable (path, super)))
-                end else raise (TypeError (pos, Polytype carrie))
+                if Vector.length existentials = 0 then
+                    match C.whnf env impl with
+                    | Some (impl, _) ->
+                        if resolve_path impl path
+                        then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
+                        else raise (TypeError (pos, Unresolvable (path, super)))
+                    | None -> raise (TypeError (pos, Unresolvable (path, super)))
+                else raise (TypeError (pos, Polytype carrie))
             | Hole -> (* TODO: Use unification (?) *)
                 let {Env.coercion = _; residual} = subtype_abs pos occ env carrie Hole carrie' in
                 let {Env.coercion = _; residual = residual'} = subtype_abs pos occ env carrie Hole carrie' in
@@ -291,25 +293,27 @@ and subtype pos occ env typ locator super : coercer matching =
         | (Use _, _) | (_, Use _) -> failwith "unreachable: Use in subtype_whnf"
         | _ -> raise (TypeError (pos, SubType (typ, super))) in
 
-    let (decidable, typ', co) = C.whnf env typ in
-    let (decidable', super', co') = C.whnf env super in
-    if decidable && decidable' then begin
-        let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
-        { coercion =
-            (match (co, co') with
-            | (Some co, Some co') ->
-                Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
-            | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
-            | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
-            | (None, None) -> Cf coerce)
-        ; residual }
-    end else begin
+    let (>>=) = Option.bind in
+    let res =
+        C.whnf env typ >>= fun (typ', co) ->
+        C.whnf env super |> Option.map (fun (super', co') ->
+            let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
+            { Env.coercion =
+                (match (co, co') with
+                | (Some co, Some co') ->
+                    Env.Cf (fun v -> {pos; v = Cast (coerce {pos; v = Cast (v, co)}, Symm co')})
+                | (Some co, None) -> Cf (fun v -> coerce {pos; v = Cast (v, co)})
+                | (None, Some co') -> Cf (fun v -> {pos; v = Cast (coerce v, Symm co')})
+                | (None, None) -> Cf coerce)
+            ; residual }) in
+    match res with
+    | Some res -> res
+    | None ->
         let patchable = ref {Ast.pos; v = Const (Int 0)} in
         { coercion = Cf (fun v ->
             patchable := v;
             {pos; v = Patchable patchable})
         ; residual = Some (Sub (occ, typ, locator, super, patchable)) }
-    end
 
 (* # Unification *)
 
@@ -319,11 +323,12 @@ and unify_abs pos env (Exists (existentials, locator, body)) (Exists (existentia
     else failwith "todo"
 
 and unify pos env typ typ' : coercion option matching =
-    let (decidable, typ, co) = C.whnf env typ in
-    let (decidable', typ', co'') = C.whnf env typ' in
-    if decidable && decidable' then begin
+    let (>>=) = Option.bind in
+    let res =
+        C.whnf env typ >>= fun (typ, co) ->
+        C.whnf env typ' |> Option.map (fun (typ', co'') ->
         let {Env.coercion = co'; residual} = unify_whnf pos env typ typ' in
-        { coercion =
+        { Env.coercion =
             (match (co, co', co'') with
             | (Some co, Some co', Some co'') -> Some (Trans (Trans (co, co'), Symm co''))
             | (Some co, Some co', None) -> Some (Trans (co, co'))
@@ -333,12 +338,13 @@ and unify pos env typ typ' : coercion option matching =
             | (None, Some co', None) -> Some co'
             | (None, None, Some co'') -> Some (Symm co'')
             | (None, None, None) -> None)
-        ; residual }
-    end else begin
+        ; residual }) in
+    match res with
+    | Some res -> res
+    | None ->
         let patchable = ref (Refl typ') in
         { coercion = Some (FcType.Patchable patchable)
         ; residual = Some (Unify (typ, typ', patchable)) }
-    end
 
 and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     let open ResidualMonoid in
@@ -429,8 +435,8 @@ and check_uv_assignee pos env uv level typ =
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
 
     match C.whnf env typ with
-    | (true, typ, _) -> check typ
-    | (false, _, _) -> false
+    | Some (typ, _) -> check typ
+    | None -> false
 
 (* # Constraint Solving *)
 

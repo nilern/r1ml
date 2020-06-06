@@ -272,48 +272,46 @@ and kindcheck env (typ : Ast.Type.t with_pos) =
     Exists ( Vector.map snd (Vector.of_list (!params)), close_locator substitution locator
            , close substitution typ )
 
-(* TODO: boolean flags considered harmful *)
-and whnf env typ : bool * FcType.typ * coercion option =
-    let rec eval : FcType.typ -> bool * FcType.typ * coercion option = function
-        | App (callee, arg) ->
-            let (decidable, callee, callee_co) = eval callee in
-            let (decidable', typ, co) = apply callee arg in
-            ( decidable && decidable'
-            , typ
+and whnf env typ =
+    let (>>=) = Option.bind in
+
+    let rec eval = function
+        | FcType.App (callee, arg) ->
+            eval callee >>= fun (callee, callee_co) ->
+            apply callee arg |> Option.map (fun (typ, co) ->
+            ( typ
             , match (callee_co, co) with
               | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, arg)))
               | (Some callee_co, None) -> Some (Inst (callee_co, arg))
               | (None, Some co) -> Some co
-              | (None, None) -> None )
-        | Fn _ as typ -> (true, typ, None)
+              | (None, None) -> None ))
+        | Fn _ as typ -> Some (typ, None)
         | Ov ov as typ ->
             (match Env.get_implementation env ov with
             | Some (axname, _, uv) ->
                 let typ = Uv uv in
-                let (decidable, typ, co) = eval typ in
-                ( decidable
-                , typ
+                eval typ |> Option.map (fun (typ, co) ->
+                ( typ
                 , match co with
                   | Some co -> Some (Trans (AUse axname, co))
-                  | None -> Some (AUse axname) )
-            | None -> (true, typ, None))
+                  | None -> Some (AUse axname) ))
+            | None -> Some (typ, None))
         | Uv uv as typ ->
             (match !uv with
             | Assigned typ -> eval typ
-            | Unassigned _ -> (true, typ, None))
-        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> (true, typ, None)
+            | Unassigned _ -> Some (typ, None))
+        | (Pi _ | Record _ | Type _ | Int | Bool) as typ -> Some (typ, None)
         | Bv _ -> failwith "unreachable: `Bv` in `whnf`"
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
-    and apply : typ -> typ -> bool * typ * coercion option = fun callee arg ->
-        match callee with
+    and apply callee arg = match callee with
         | Fn (param, body) ->
             let substitution = Vector.singleton (UvP {contents = Assigned arg}) in (* HACK *)
             eval (expose substitution body)
-        | Ov _ | App _ -> (true, FcType.App (callee, arg), None)
+        | Ov _ | App _ -> Some (FcType.App (callee, arg), None)
         | Uv uv ->
             (match !uv with
-            | Unassigned _ -> (false, FcType.App (callee, arg), None)
+            | Unassigned _ -> None
             | Assigned _ -> failwith "unreachable: Assigned in `apply`.")
         | Pi _ | Record _ | Type _ | Int | Bool | Bv _ | Use _ ->
             failwith "unreachable: uncallable type in `whnf`"
