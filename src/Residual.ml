@@ -1,7 +1,7 @@
 open FcType
 
 type t =
-    | Sub of bool * FcType.t * locator * FcType.t * FcTerm.expr Ast.with_pos ref
+    | Sub of FcType.t * locator * FcType.t * FcTerm.expr Ast.with_pos ref
     | Unify of FcType.t * FcType.t * coercion ref
     | Residuals of t * t
     | Skolems of binding Vector1.t * t

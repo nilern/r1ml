@@ -87,7 +87,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
             (match Vector1.of_vector skolems with
             | Some skolems ->
                 let (_, _, res_typ) as typ = reabstract env codomain in
-                let {coercion = Cf coerce; residual} = M.coercion expr.pos true env concr_codo typ in
+                let {coercion = Cf coerce; residual} = M.coercion expr.pos env concr_codo typ in
                 M.solve expr.pos env residual;
                 let name = Name.fresh () in
                 let def = {name; typ = concr_codo} in
@@ -168,7 +168,7 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
         let {Env.term; typ = expr_typ; eff} = typeof env expr in
         let name = Name.fresh () in
         let lvalue = {name; typ = expr_typ} in
-        let {coercion = Cf coerce; residual} = M.coercion expr.pos true env expr_typ typ in
+        let {coercion = Cf coerce; residual} = M.coercion expr.pos env expr_typ typ in
         M.solve expr.pos env residual;
         { term = {expr with v = Letrec ( Vector1.singleton (expr.pos, lvalue, term)
                                        , coerce {expr with v = Use name} )}
@@ -374,7 +374,7 @@ and lookup pos env name =
             binding := Env.BlackUnn (lvalue, expr, eff);
             (Hole, lvalue)
         | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
-            let {coercion = Cf coerce; residual} = M.subtype expr.pos true env typ Hole typ' in
+            let {coercion = Cf coerce; residual} = M.subtype expr.pos env typ Hole typ' in
             M.solve pos env residual;
             binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
             (Hole, lvalue)

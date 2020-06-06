@@ -19,9 +19,8 @@ end
 
 module type MATCHING = sig
     val focalize : span -> Env.t -> typ -> locator -> coercer * typ
-    val coercion : span -> bool -> Env.t -> typ -> ov Vector.t * locator * typ
-        -> coercer matching
-    val subtype : span -> bool -> Env.t -> typ -> locator -> typ -> coercer matching
+    val coercion : span -> Env.t -> typ -> ov Vector.t * locator * typ -> coercer matching
+    val subtype : span -> Env.t -> typ -> locator -> typ -> coercer matching
     val unify : span -> Env.t -> typ -> typ -> coercion option matching
     val solve : span -> Env.t -> Residual.t option -> unit
 end

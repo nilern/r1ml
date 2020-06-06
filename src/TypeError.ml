@@ -47,7 +47,7 @@ let rec cause_to_doc = function
             | Axioms (_, residual) | Skolems (_, residual) -> to_doc residual
             | Residuals (residual, residual') ->
                 to_doc residual ^/^ PPrint.string "and" ^/^ to_doc residual'
-            | Sub (_, typ, _, super, _) -> cause_to_doc (SubType (typ, super))
+            | Sub (typ, _, super, _) -> cause_to_doc (SubType (typ, super))
             | Unify (typ, typ', _) -> cause_to_doc (Unify (typ, typ'))
         in to_doc residual
     | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.Term.expr_to_doc expr
