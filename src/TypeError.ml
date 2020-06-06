@@ -12,6 +12,7 @@ type error =
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
+    | Unresolvable of path * typ
     | Unsolvable of Residual.t
     | ImpureType of Ast.Term.expr
     | Escape of FcType.ov
@@ -38,6 +39,9 @@ let rec cause_to_doc = function
     | SubEffect (eff, eff') -> Ast.Effect.to_doc eff ^/^ PPrint.string "is not a subeffect of" ^/^ Ast.Effect.to_doc eff'
     | SubType (typ, super) -> FcType.to_doc typ ^/^ PPrint.string "is not a subtype of" ^/^ FcType.to_doc super
     | Unify (typ, typ') -> FcType.to_doc typ ^/^ PPrint.string "does no unify with" ^/^ FcType.to_doc typ'
+    | Unresolvable (path, impl) ->
+        FcType.path_to_doc path ^/^ PPrint.string "cannot be resolved with the unresolved"
+            ^/^ FcType.to_doc impl
     | Unsolvable residual ->
         let rec to_doc = function
             | Axioms (_, residual) | Skolems (_, residual) -> to_doc residual

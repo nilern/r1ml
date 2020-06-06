@@ -189,6 +189,7 @@ and subtype pos occ env typ locator super : coercer matching =
             (match !uv with
             | Assigned _ -> true
             | Unassigned (_, level) ->
+                (* TODO: Ensure that `typ` contains no Unassigneds with level <= level of HKT params: *)
                 check_uv_assignee pos env uv level typ
                     && begin uv := Assigned typ; true end)
         | OvP ov ->
@@ -267,7 +268,7 @@ and subtype pos occ env typ locator super : coercer matching =
                     let (decidable, impl, _) = C.whnf env impl in
                     if decidable && resolve_path impl path
                     then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
-                    else failwith "todo"
+                    else raise (TypeError (pos, Unresolvable (path, super)))
                 end else raise (TypeError (pos, Polytype carrie))
             | Hole -> (* TODO: Use unification (?) *)
                 let {Env.coercion = _; residual} = subtype_abs pos occ env carrie Hole carrie' in

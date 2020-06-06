@@ -72,6 +72,7 @@ val universal_to_doc : binding Vector.t -> PPrint.document -> PPrint.document
 val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document
+val path_to_doc : path -> PPrint.document
 
 val to_abs : t -> abs
 
