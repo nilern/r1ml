@@ -4,7 +4,7 @@ open FcType
 
 type span = Ast.span
 type 'a with_pos = 'a Ast.with_pos
-type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
+type 'a typing = {term : 'a; typ : typ; eff : Effect.t}
 
 (* Newtype to allow ignoring subtyping coercions without partial application warning: *)
 (* TODO: triv_expr with_pos -> expr with_pos to avoid bugs that would delay side effects
@@ -12,7 +12,7 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
 type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
 
 module type ELABORATION = sig
-    val kindcheck : Env.t -> Ast.Type.t with_pos -> FcType.abs
+    val kindcheck : Env.t -> Ast.Type.t with_pos -> abs
     val whnf : Env.t -> typ -> (typ * coercion option) option
 end
 

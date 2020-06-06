@@ -4,8 +4,6 @@ open FcTerm
 open FcType
 open TypeError
 
-type 'a with_pos = 'a Ast.with_pos
-
 let rec kindcheck env (typ : Ast.Type.t with_pos) =
     let rec elaborate env (typ : Ast.Type.t with_pos) =
         match typ.v with
