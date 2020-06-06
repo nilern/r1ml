@@ -5,8 +5,9 @@ module Env = Env
 
 type 'a typing = 'a TyperSigs.typing
 
-module rec C : TyperSigs.CHECKING = Checking.Make(M)
-and M : TyperSigs.MATCHING = Matching.Make(C)
+module rec E : TyperSigs.ELABORATION = Elaboration.Make(C)(M)
+and C : TyperSigs.CHECKING = Checking.Make(E)(M)
+and M : TyperSigs.MATCHING = Matching.Make(E)
 
 (* # REPL support *)
 

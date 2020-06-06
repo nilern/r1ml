@@ -11,10 +11,15 @@ type 'a typing = {term : 'a; typ : FcType.typ; eff : Effect.t}
          or that duplicate large/nontrivial terms: *)
 type coercer = Cf of (FcTerm.expr with_pos -> FcTerm.expr with_pos)
 
-module type CHECKING = sig
+module type ELABORATION = sig
+    val kindcheck : Env.t -> Ast.Type.t with_pos -> FcType.abs
     val whnf : Env.t -> typ -> (typ * coercion option) option
+end
+
+module type CHECKING = sig
     val typeof : Env.t -> Ast.Term.expr with_pos -> FcTerm.expr with_pos typing
     val deftype : Env.t -> Ast.Term.def -> FcTerm.def typing
+    val lookup : span -> Env.t -> Name.t -> locator * FcTerm.lvalue
 end
 
 module type MATCHING = sig

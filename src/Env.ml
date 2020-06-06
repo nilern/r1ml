@@ -53,6 +53,11 @@ let generate env binding =
         | [] -> failwith "Typer.Env.generate: missing root Existential scope"
     in generate env.scopes
 
+let reabstract env (Exists (params, locator, body)) =
+    let params' = Vector.map (fun kind -> generate env (Name.fresh (), kind)) params in
+    let substitution = Vector.map (fun ov -> OvP ov) params' in
+    (params', expose_locator substitution locator, expose substitution body)
+
 let push_domain_skolems {scopes; current_level} (Exists (existentials, locator, domain)) =
     let level = current_level + 1 in
     let skolems = Vector.map (fun kind -> ((Name.fresh (), kind), level)) existentials in

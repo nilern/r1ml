@@ -1,12 +1,10 @@
-type 'a with_pos = 'a Ast.with_pos
-
 module ResidualMonoid = struct
     include Monoid.OfSemigroup(Residual)
 
     let skolemized skolems m = Option.map (fun r -> Residual.Skolems (skolems, r)) m
 end
 
-module Make (C : TyperSigs.CHECKING) : TyperSigs.MATCHING = struct
+module Make (E : TyperSigs.ELABORATION) : TyperSigs.MATCHING = struct
 
 open Residual
 open FcType
@@ -15,6 +13,7 @@ open FcTerm
 open TypeError
 
 type coercer = TyperSigs.coercer
+
 type 'a matching = {coercion : 'a; residual : Residual.t option}
 
 (* # Focalization *)
@@ -59,7 +58,7 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
                 | _ -> raise (TypeError (pos, Unusable (template, typ))))
             | Hole -> failwith "unreachable: Hole as template in `focalize`.") in
 
-    match C.whnf env typ with
+    match E.whnf env typ with
     | Some (typ, coercion) ->
         let (Cf cf as coercer, typ) = focalize_whnf typ in
         ( (match coercion with
@@ -268,7 +267,7 @@ and subtype pos env typ locator super : coercer matching =
                 | TypeL path ->
                     let Exists (existentials, _, impl) = carrie in
                     if Vector.length existentials = 0 then
-                        match C.whnf env impl with
+                        match E.whnf env impl with
                         | Some (impl, _) ->
                             if resolve_path impl path
                             then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
@@ -315,8 +314,8 @@ and subtype pos env typ locator super : coercer matching =
 
     let (>>=) = Option.bind in
     let res =
-        C.whnf env typ >>= fun (typ', co) ->
-        C.whnf env super |> Option.map (fun (super', co') ->
+        E.whnf env typ >>= fun (typ', co) ->
+        E.whnf env super |> Option.map (fun (super', co') ->
             let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
             { coercion =
                 (match (co, co') with
@@ -345,8 +344,8 @@ and unify_abs pos env (Exists (existentials, locator, body)) (Exists (existentia
 and unify pos env typ typ' : coercion option matching =
     let (>>=) = Option.bind in
     let res =
-        C.whnf env typ >>= fun (typ, co) ->
-        C.whnf env typ' |> Option.map (fun (typ', co'') ->
+        E.whnf env typ >>= fun (typ, co) ->
+        E.whnf env typ' |> Option.map (fun (typ', co'') ->
         let {coercion = co'; residual} = unify_whnf pos env typ typ' in
         { coercion =
             (match (co, co', co'') with
@@ -457,7 +456,7 @@ and check_uv_assignee pos env uv level typ =
         | Bv _ | Prim _ -> true
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
 
-    match C.whnf env typ with
+    match E.whnf env typ with
     | Some (typ, _) -> check typ
     | None -> false
 
