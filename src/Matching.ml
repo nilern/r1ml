@@ -144,39 +144,36 @@ and subtype pos occ env typ locator super : coercer matching =
     let empty = ResidualMonoid.empty in
     let combine = ResidualMonoid.combine in
 
-    let articulate pos uv_typ template = match uv_typ with
+    let rec articulate pos uv_typ template = match uv_typ with
         | Uv uv ->
             (match uv with
             | {contents = Unassigned (_, level)} ->
-                (match template with
-                | Pi _ ->
-                    let typ = Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (to_abs (Uv (sibling uv)))) in
-                    uv := Assigned typ;
-                    typ
-                | Type _ ->
-                    let typ = Type (to_abs (Uv (sibling uv))) in
-                    uv := Assigned typ;
-                    typ
-                | Prim pt -> uv := Assigned (Prim pt); Prim pt
-                | Ov ov ->
-                    let typ = Ov ov in
-                    uv := Assigned typ;
-                    typ
-                | Uv uv' ->
-                    (match !uv' with
-                    | Unassigned (_, level') ->
-                        if level' <= level then begin
-                            let typ = Uv uv' in
-                            uv := Assigned typ;
-                            typ
-                        end else begin
-                            let typ = Uv uv in
-                            uv' := Assigned typ;
-                            typ
-                        end
-                    | Assigned _ -> failwith "unreachable: Assigned as template of `articulate`")
-                | Record _ -> raise (TypeError (pos, RecordArticulation template)) (* no can do without row typing *)
-                | Use _ -> failwith "unreachable: `Use` as template of `articulate`")
+                let (uv, typ) = match template with
+                    | Uv uv' ->
+                        (match !uv' with
+                        | Unassigned (_, level') ->
+                            if level' <= level
+                            then (uv, template)
+                            else (uv', uv_typ)
+                        | Assigned _ -> failwith "unreachable: Assigned as template of `articulate`")
+
+                    | Ov ((_, level') as ov) ->
+                        if level' <= level
+                        then (uv, Ov ov)
+                        else raise (TypeError (pos, Escape ov))
+
+                    | Pi _ ->
+                        (uv, Pi (Vector.of_list [], Hole, Uv (sibling uv), Impure, (to_abs (Uv (sibling uv)))))
+                    | Type _ -> (uv, Type (to_abs (Uv (sibling uv))))
+                    | App _ -> (uv, FcType.App (Uv (sibling uv), Uv (sibling uv)))
+                    | Prim pt -> (uv, Prim pt)
+
+                    | Record _ -> raise (TypeError (pos, RecordArticulation template)) (* no can do without row typing *)
+                    | Fn _ -> failwith "unreachable: `Fn` as template of `articulate`"
+                    | Bv _ -> failwith "unreachable: `Bv` as template of `articulate`"
+                    | Use _ -> failwith "unreachable: `Use` as template of `articulate`" in
+                uv := Assigned typ;
+                typ
             | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv")
         | _ -> failwith "unreachable: `articulate` on non-uv" in
 
@@ -200,6 +197,7 @@ and subtype pos occ env typ locator super : coercer matching =
         | BvP _ -> failwith "unreachable: BvP in `resolve_path`" in
 
     let subtype_whnf typ locator super : coercer matching = match (typ, super) with
+        | (Uv uv, Uv uv') when uv = uv' -> {coercion = Cf Fun.id; residual = None}
         | (Uv uv, _) ->
             (match !uv with
             | Unassigned _ -> subtype pos false env (articulate pos typ super) locator super
