@@ -177,9 +177,12 @@ and subtype pos env typ locator super : coercer matching =
     (* TODO: Get this on firmer ground, it is quite questionable ATM: *)
     let rec resolve_path typ path = match path with
         | AppP (path, arg) ->
-            (match arg with
-            | OvP _ -> resolve_path (FcType.Fn typ) path
-            | _ -> failwith "unreachable: uv path in locator with non-ov arg")
+            let rec arg_name = function
+                | Uv {contents = Assigned arg} -> arg_name arg
+                | Ov ((name, _), _) -> name in
+            let name = arg_name (FcType.of_path arg) in
+            let substitution = Name.Map.singleton name 0 in
+            resolve_path (FcType.Fn (close substitution typ)) path
         | UvP uv ->
             (match !uv with
             | Assigned _ -> true
@@ -210,10 +213,10 @@ and subtype pos env typ locator super : coercer matching =
                     | PiL (_, _, codomain_locator) -> codomain_locator
                     | Hole -> Hole
                     | _ -> failwith "unreachable: function locator" in
-                let (env, universals', codomain_locator, (domain', eff', codomain')) =
-                    Env.push_arrow_skolems env universals' codomain_locator (domain', eff', codomain') in
+                let (env, universals', domain', eff', codomain') =
+                    Env.push_arrow_skolems env universals' domain' eff' codomain' in
                 let (uvs, domain_locator, domain, eff, codomain) =
-                    Env.instantiate_arrow env (universals, domain_locator, domain, eff, codomain) in
+                    Env.instantiate_arrow env universals domain_locator domain eff codomain in
 
                 let {coercion = Cf coerce_domain; residual = domain_residual} =
                     subtype pos env domain' domain_locator domain in

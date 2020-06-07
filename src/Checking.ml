@@ -60,7 +60,7 @@ let rec typeof env (expr : Ast.Term.expr with_pos) = match expr.v with
         (match M.focalize callee_expr.pos env callee_typ (PiL (Vector.of_list [], Impure, Hole)) with
         | (Cf coerce, Pi (universals, locator, domain, app_eff, codomain)) ->
             let (uvs, _, domain, app_eff, codomain) =
-                Env.instantiate_arrow env (universals, locator, domain, app_eff, codomain) in
+                Env.instantiate_arrow env universals locator domain app_eff codomain in
             
             let {TyperSigs.term = arg; typ = _; eff = arg_eff} = check env (to_abs domain) arg in
 

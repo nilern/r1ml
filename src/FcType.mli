@@ -45,6 +45,7 @@ and locator =
 
 and 'a field = {label : string; typ : 'a}
 
+(* TODO: Have just one notion of (applied) type variables / paths: *)
 and path =
     | AppP of path * path
     | BvP of bv
@@ -73,6 +74,7 @@ val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document
 val path_to_doc : path -> PPrint.document
 
+val of_path : path -> t
 val to_abs : t -> abs
 
 val freshen : binding -> binding

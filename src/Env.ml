@@ -74,15 +74,13 @@ let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
       ; current_level = level }
     , ebs, expose_locator substitution locator, expose substitution body )
 
-let push_arrow_skolems {scopes; current_level} universals codomain_locator (domain, eff, codomain) =
+let push_arrow_skolems {scopes; current_level} universals domain eff codomain =
     let level = current_level + 1 in
     let ubs = Vector.map (fun kind -> (Name.fresh (), kind)) universals in
     let skolems = Vector.map (fun binding -> (binding, level)) ubs in
     let substitution = Vector.map (fun ov -> OvP ov) skolems in
     ( {scopes = Universal skolems :: scopes; current_level = level}
-    , ubs
-    , expose_locator substitution codomain_locator
-    , (expose substitution domain, eff, expose_abs substitution codomain) )
+    , ubs, expose substitution domain, eff, expose_abs substitution codomain )
 
 let push_skolems {scopes; current_level} bindings =
     let level = current_level + 1 in
@@ -97,7 +95,7 @@ let instantiate_abs env (existentials, locator, body) =
     let substitution = Vector.map (fun uv -> UvP uv) uvs in
     (uvs, expose_locator substitution locator, expose substitution body)
 
-let instantiate_arrow env (universals, domain_locator, domain, eff, codomain) =
+let instantiate_arrow env universals domain_locator domain eff codomain =
     let uvs = Vector.map (fun _ -> uv env (Name.fresh())) universals in
     let substitution = Vector.map (fun uv -> UvP uv) uvs in
     ( uvs, expose_locator substitution domain_locator, expose substitution domain, eff
