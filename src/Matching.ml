@@ -187,8 +187,8 @@ and subtype pos env typ locator super : coercer matching =
                     | PiL (_, _, codomain_locator) -> codomain_locator
                     | Hole -> Hole
                     | _ -> failwith "unreachable: function locator" in
-                let (env, universals', domain', eff', codomain') =
-                    Env.push_arrow_skolems env universals' domain' eff' codomain' in
+                let (env, universals', domain', eff', codomain_locator, codomain') =
+                    Env.push_arrow_skolems env universals' domain' eff' codomain_locator codomain' in
                 let (uvs, domain_locator, domain, eff, codomain) =
                     Env.instantiate_arrow env universals domain_locator domain eff codomain in
 
@@ -240,7 +240,7 @@ and subtype pos env typ locator super : coercer matching =
 
         | (Type (Exists (existentials, _, carrie) as abs_carrie), _) -> (match super with
             | Type abs_carrie' ->
-                (match locator with
+                (match locator with (* FIXME: Could also be App(Ov ov, ... with axiom for ov in scope: *)
                 | TypeL (App (Uv ({contents = Unassigned (_, level)} as uv), args) as path) ->
                     if Vector.length existentials = 0 then begin
                         let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
@@ -457,7 +457,7 @@ and check_uv_assignee pos env uv level max_uv_level typ =
 
     match E.whnf env typ with
     | Some (typ, _) -> check typ
-    | None -> false
+    | None -> false (* FIXME: This should not cause residual, we can still check the callee uv etc. *)
 
 (* # Constraint Solving *)
 
