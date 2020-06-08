@@ -126,8 +126,9 @@ and whnf env typ =
             (match !uv with
             | Unassigned _ -> None
             | Assigned _ -> failwith "unreachable: Assigned in `apply`.")
-        | Pi _ | Record _ | Type _ | Prim _ | Bv _ | Use _ ->
-            failwith "unreachable: uncallable type in `whnf`"
+        | Pi _ | Record _ | Type _ | Prim _ -> failwith "unreachable: uncallable type in `whnf`"
+        | Bv _ -> failwith "unreachable: `Bv` in `whnf/apply`"
+        | Use _ -> failwith "unreachable: `Use` in `whnf/apply`"
     in eval typ
 end
 

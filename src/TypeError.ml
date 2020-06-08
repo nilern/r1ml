@@ -14,6 +14,7 @@ type error =
     | Unify of typ * typ
     | Unresolvable of FcType.t * typ
     | Unsolvable of Residual.t
+    | IncompleteImpl of FcType.uv * FcType.uv
     | ImpureType of Ast.Term.expr
     | Escape of FcType.ov
     | Occurs of FcType.uv * typ
@@ -50,6 +51,9 @@ let rec cause_to_doc = function
             | Sub (typ, _, super, _) -> cause_to_doc (SubType (typ, super))
             | Unify (typ, typ', _) -> cause_to_doc (Unify (typ, typ'))
         in to_doc residual
+    | IncompleteImpl (uv, uv') ->
+        FcType.to_doc (Uv uv) ^/^ PPrint.string "cannot be resolved with the underresolved"
+            ^/^ FcType.to_doc (Uv uv')
     | ImpureType expr -> PPrint.string "impure type expression" ^/^ Ast.Term.expr_to_doc expr
     | Escape ((name, _), _) -> Name.to_doc name ^/^ PPrint.string "would escape"
     | Occurs (uv, typ) -> FcType.to_doc (Uv uv) ^/^ PPrint.string "occurs in" ^/^ FcType.to_doc typ

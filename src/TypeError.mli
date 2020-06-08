@@ -11,6 +11,7 @@ type error =
     | Unify of typ * typ
     | Unresolvable of FcType.t * typ
     | Unsolvable of Residual.t
+    | IncompleteImpl of FcType.uv * FcType.uv
     | ImpureType of Ast.Term.expr
     | Escape of FcType.ov
     | Occurs of FcType.uv * typ

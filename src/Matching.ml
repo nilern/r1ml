@@ -170,29 +170,6 @@ and subtype pos env typ locator super : coercer matching =
             | {contents = Assigned _} -> failwith "unreachable: `articulate` on assigned uv")
         | _ -> failwith "unreachable: `articulate` on non-uv" in
 
-    (* TODO: Get this on firmer ground, it is quite questionable ATM: *)
-    let rec resolve_path typ path = match path with
-        | FcType.App (path, args) ->
-            let rec arg_name = function
-                | Uv {contents = Assigned arg} -> arg_name arg
-                | Ov ((name, _), _) -> name in
-            let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
-                (i + 1, Name.Map.add (arg_name arg) i substitution)
-            ) (0, Name.Map.empty) args in
-            resolve_path (FcType.Fn (close substitution typ)) path
-        | Uv uv ->
-            (match !uv with
-            | Assigned _ -> true
-            | Unassigned (_, level) ->
-                (* TODO: Ensure that `typ` contains no Unassigneds with level <= level of HKT params: *)
-                check_uv_assignee pos env uv level typ
-                    && begin uv := Assigned typ; true end)
-        | Ov ov ->
-            (match Env.get_implementation env ov with
-            | Some (_, _, uv) -> resolve_path typ (Uv uv)
-            | None -> true)
-        | Bv _ -> failwith "unreachable: BvP in `resolve_path`" in
-
     let subtype_whnf typ locator super : coercer matching = match (typ, super) with
         | (Uv uv, Uv uv') when uv = uv' -> {coercion = Cf Fun.id; residual = None}
         | (Uv uv, _) ->
@@ -261,27 +238,34 @@ and subtype pos env typ locator super : coercer matching =
                 ; residual }
             | _ -> raise (TypeError (pos, SubType (typ, super))))
 
-        | (Type carrie, _) -> (match super with
-            | Type carrie' ->
+        | (Type (Exists (existentials, _, carrie) as abs_carrie), _) -> (match super with
+            | Type abs_carrie' ->
                 (match locator with
-                | TypeL path ->
-                    let Exists (existentials, _, impl) = carrie in
-                    if Vector.length existentials = 0 then
-                        match E.whnf env impl with
-                        | Some (impl, _) ->
-                            if resolve_path impl path
-                            then {coercion = Cf (fun _ -> {v = Proxy carrie'; pos}); residual = empty}
-                            else raise (TypeError (pos, Unresolvable (path, super)))
-                        | None -> raise (TypeError (pos, Unresolvable (path, super)))
-                    else raise (TypeError (pos, Polytype carrie))
+                | TypeL (App (Uv ({contents = Unassigned (_, level)} as uv), args) as path) ->
+                    if Vector.length existentials = 0 then begin
+                        let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
+                            match arg with
+                            | Ov ((name, _), _) -> (i + 1, Name.Map.add name i substitution)
+                            | _ -> failwith "unreachable: non-ov path arg in path locator"
+                        ) (0, Name.Map.empty) args in
+                        let impl = FcType.Fn (close substitution carrie) in
+                        let max_uv_level = match Vector1.get args 0 with
+                            | Ov (_, level') -> level' - 1
+                            | _ -> failwith "unreachable: non-ov path arg in path locator" in
+                        if check_uv_assignee pos env uv level max_uv_level impl then begin
+                            uv := Assigned impl;
+                            { coercion = TyperSigs.Cf (fun _ -> {v = Proxy abs_carrie'; pos})
+                            ; residual = empty }
+                        end else raise (TypeError (pos, Unresolvable (path, impl)))
+                    end else raise (TypeError (pos, Polytype abs_carrie))
 
-                | Hole -> (* TODO: Use unification (?) *)
-                    let {coercion = _; residual} = subtype_abs pos env carrie Hole carrie' in
-                    let {coercion = _; residual = residual'} = subtype_abs pos env carrie Hole carrie' in
-                    { coercion = Cf (fun _ -> {v = Proxy carrie'; pos})
-                    ; residual = combine residual residual' }
-
-                | _ -> failwith "unreachable: type proxy locator")
+                | _ -> (* TODO: Use unification (?) *)
+                    let {coercion = _; residual} =
+                        subtype_abs pos env abs_carrie Hole abs_carrie' in
+                    let {coercion = _; residual = residual'} =
+                        subtype_abs pos env abs_carrie' Hole abs_carrie in
+                    { coercion = Cf (fun _ -> {v = Proxy abs_carrie'; pos})
+                    ; residual = combine residual residual' })
             | _ -> raise (TypeError (pos, SubType (typ, super))))
 
         | (App _, _) -> (match super with
@@ -371,7 +355,7 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Uv uv, typ') | (typ', Uv uv) ->
         (match !uv with
         | Unassigned (_, level) ->
-            if check_uv_assignee pos env uv level typ' then begin
+            if check_uv_assignee pos env uv level Int.max_int typ' then begin
                 uv := Assigned typ';
                 {coercion = None; residual = empty}
             end else begin
@@ -428,13 +412,14 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Bv _, _) -> failwith "unreachable: Bv in unify_whnf"
     | (Use _, _) -> failwith "unreachable: Use in unify_whnf"
 
-and check_uv_assignee_abs pos env uv level (Exists (existentials, _, body) as typ) =
+and check_uv_assignee_abs pos env uv level max_uv_level (Exists (existentials, _, body) as typ) =
     if Vector.length existentials = 0
-    then check_uv_assignee pos env uv level body
+    then check_uv_assignee pos env uv level max_uv_level body
     else raise (TypeError (pos, Polytype typ)) (* not a monotype *)
 
-(* Monotype check, occurs check, ov escape check and uv level updates. Complected for speed. *)
-and check_uv_assignee pos env uv level typ =
+(* Monotype check, occurs check, ov escape check, HKT capturability check and uv level updates.
+   Complected for speed. *)
+and check_uv_assignee pos env uv level max_uv_level typ =
     let check = function
         | Uv uv' ->
             if uv = uv'
@@ -444,24 +429,29 @@ and check_uv_assignee pos env uv level typ =
                 | Unassigned (name, level') ->
                     if level' <= level
                     then true
-                    else (uv' := Unassigned (name, level); true) (* hoist *)
+                    else
+                        if level' <= max_uv_level
+                        then (uv' := Unassigned (name, level); true) (* hoist *)
+                        else raise (TypeError (pos, IncompleteImpl (uv, uv')))
                 | Assigned _ -> failwith "unreachable: Assigned `uv'` in `check_uv_assignee`")
         | Ov ((_, level') as ov) ->
             if level' <= level
             then true
             else raise (TypeError (pos, Escape ov))
-        | Fn body -> check_uv_assignee pos env uv level body
+        | Fn body -> check_uv_assignee pos env uv level max_uv_level body
         | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
-            then check_uv_assignee pos env uv level domain
-                && check_uv_assignee_abs pos env uv level codomain
+            then check_uv_assignee pos env uv level max_uv_level domain
+                && check_uv_assignee_abs pos env uv level max_uv_level codomain
             else raise (TypeError (pos, Polytype (to_abs typ)))
         | Record fields ->
-            Vector.for_all (fun {label = _; typ} -> check_uv_assignee pos env uv level typ) fields
-        | Type carrie -> check_uv_assignee_abs pos env uv level carrie
+            fields |> Vector.for_all (fun {label = _; typ} ->
+                check_uv_assignee pos env uv level max_uv_level typ
+            )
+        | Type carrie -> check_uv_assignee_abs pos env uv level max_uv_level carrie
         | App (callee, args) ->
-            check_uv_assignee pos env uv level callee
-                && Vector1.for_all (check_uv_assignee pos env uv level) args
+            check_uv_assignee pos env uv level max_uv_level callee
+                && Vector1.for_all (check_uv_assignee pos env uv level max_uv_level) args
         | Bv _ | Prim _ -> true
         | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
 
