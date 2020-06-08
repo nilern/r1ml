@@ -17,8 +17,14 @@ let of_list = function
 
 let to_list = Vector.to_list
 
+let append = Vector.append
+
 let fold_left = Vector.fold_left
+let for_all = Vector.for_all
+let exists = Vector.exists
 let map = Vector.map
+let mapi = Vector.mapi
+let map2 = Vector.map2
 
 let fold_left2 = Vector.fold_left2
 

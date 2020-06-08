@@ -15,10 +15,14 @@ val to_list : 'a t -> 'a list
 val fold_left : ('a -> 'b -> 'a) -> 'a -> 'b t -> 'a
 val fold_right : ('b -> 'a -> 'a) -> 'b t -> 'a -> 'a
 val for_all : ('a -> bool) -> 'a t -> bool
+val exists : ('a -> bool) -> 'a t -> bool
 val map : ('a -> 'b) -> 'a t -> 'b t
+val mapi : (int -> 'a -> 'b) -> 'a t -> 'b t
+val map2 : ('a -> 'b -> 'c) -> 'a t -> 'b t -> 'c t
 val iter : ('a -> unit) -> 'a t -> unit
 val find_opt : ('a -> bool) -> 'a t -> 'a option
 val find : ('a -> bool) -> 'a t -> 'a
+val append : 'a t -> 'a t -> 'a t
 val split : ('a * 'b) t -> 'a t * 'b t
 
 val fold_left2 : ('a -> 'b -> 'c -> 'a) -> 'a -> 'b t -> 'c t -> 'a

@@ -1,10 +1,8 @@
 module Effect = Ast.Effect
 
-type kind
-    = ArrowK of kind * kind
+type kind =
+    | ArrowK of kind Vector1.t * kind
     | TypeK
-
-type effect = Effect.t
 
 type bv = {depth : int; sibli : int}
 
@@ -23,37 +21,31 @@ and uv = uvv ref
 and abs = Exists of kind Vector.t * locator * t
 
 and t =
-    | Pi of kind Vector.t * locator * t * effect * abs
+    | Pi of kind Vector.t * locator * t * Effect.t * abs
     | Record of t field Vector.t
-    | Fn of t
-    | App of t * t
     | Type of abs
-    | Use of binding
+    | Fn of t
+    | App of t * t Vector1.t
     | Bv of bv
+    | Use of binding
     | Ov of ov
     | Uv of uv
     | Prim of Prim.t
 
 and locator =
-    | PiL of kind Vector.t * effect * locator
+    | PiL of kind Vector.t * Effect.t * locator
     | RecordL of locator field Vector.t
-    | TypeL of path
+    | TypeL of t
     | Hole
 
 and 'a field = {label : string; typ : 'a}
-
-and path =
-    | AppP of path * path
-    | BvP of bv
-    | OvP of ov
-    | UvP of uv
 
 and coercion =
     | Refl of typ
     | Symm of coercion
     | Trans of coercion * coercion
-    | Comp of coercion * coercion
-    | Inst of coercion * typ
+    | Comp of coercion * coercion Vector1.t
+    | Inst of coercion * typ Vector1.t
     | AUse of Name.t
     | TypeCo of coercion
     | Patchable of coercion ref
@@ -64,9 +56,11 @@ and template = locator
 let (^^) = PPrint.(^^)
 let (^/^) = PPrint.(^/^)
 
+(* --- *)
+
 let rec kind_to_doc = function
     | ArrowK (domain, codomain) ->
-        PPrint.prefix 4 1 (domain_kind_to_doc domain)
+        PPrint.prefix 4 1 (PPrint.separate_map PPrint.space domain_kind_to_doc (Vector1.to_list domain))
             (PPrint.string "->" ^^ PPrint.blank 1 ^^ kind_to_doc codomain)
     | TypeK -> PPrint.star
 
@@ -96,42 +90,42 @@ and to_doc = function
         PPrint.surround_separate_map 4 0 (PPrint.braces PPrint.empty)
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             field_to_doc (Vector.to_list fields)
+    | Type typ -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ abs_to_doc typ)
     | Fn body ->
         PPrint.prefix 4 1
             (PPrint.string "fun" ^^ PPrint.blank 1 ^^ PPrint.dot)
             (to_doc body)
-    | App (callee, arg) -> PPrint.group (callee_to_doc callee ^/^ arg_to_doc arg)
-    | Type typ -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ abs_to_doc typ)
-    | Use (name, _) -> Name.to_doc name
+    | App (callee, args) ->
+        callee_to_doc callee ^/^ PPrint.separate_map PPrint.space arg_to_doc (Vector1.to_list args)
     | Bv {depth; sibli} ->
         PPrint.caret ^^ PPrint.string (Int.to_string depth) ^^ PPrint.slash
             ^^ PPrint.string (Int.to_string sibli)
-    | Ov ((name, _), _) -> Name.to_doc name
+    | Use (name, _) | Ov ((name, _), _) -> Name.to_doc name
     | Uv uv -> uv_to_doc uv
     | Prim pt -> Prim.to_doc pt
 
 and domain_to_doc = function
     | (Pi _ | Fn _) as domain -> PPrint.parens (to_doc domain)
-    | Uv uv ->
+    (* FIXME: | Uv uv ->
         (match !uv with
         | Assigned typ -> domain_to_doc typ
-        | Unassigned _ -> uv_to_doc uv)
+        | Unassigned _ -> uv_to_doc uv)*)
     | domain -> to_doc domain
 
 and callee_to_doc = function
     | (Pi _ | Fn _) as callee -> PPrint.parens (to_doc callee)
-    | Uv uv ->
+    (* FIXME: | Uv uv ->
         (match !uv with
         | Assigned typ -> callee_to_doc typ
-        | Unassigned _ -> uv_to_doc uv)
+        | Unassigned _ -> uv_to_doc uv)*)
     | callee -> to_doc callee
 
 and arg_to_doc = function
-    | (Pi _ | Fn _ | App _) as arg -> PPrint.parens (to_doc arg)
-    | Uv uv ->
+    | (Pi _ | Fn _ (*| App _*)) as arg -> PPrint.parens (to_doc arg)
+    (* FIXME: | Uv uv ->
         (match !uv with
         | Assigned typ -> arg_to_doc typ
-        | Unassigned _ -> uv_to_doc uv)
+        | Unassigned _ -> uv_to_doc uv)*)
     | arg -> to_doc arg
 
 and field_to_doc {label; typ} =
@@ -149,34 +143,19 @@ and locator_to_doc = function
             PPrint.lbrace (PPrint.comma ^^ PPrint.break 1) PPrint.rbrace
             (fun {label; typ} -> PPrint.string label ^/^ PPrint.colon ^/^ locator_to_doc typ)
             (Vector.to_list fields)
-    | TypeL path -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ path_to_doc path)
+    | TypeL path -> PPrint.brackets (PPrint.equals ^^ PPrint.blank 1 ^^ to_doc path)
     | Hole -> PPrint.underscore
 
 and binding_to_doc (name, kind) =
     PPrint.parens (Name.to_doc name ^/^ PPrint.colon ^/^ kind_to_doc kind)
 
-and bindings_to_doc bindings = PPrint.separate_map (PPrint.break 1) binding_to_doc bindings
-
 and universal_to_doc universals body =
-    PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ bindings_to_doc (Vector.to_list universals)))
+    PPrint.prefix 4 1 (PPrint.group (PPrint.string "forall" ^/^ kinds_to_doc (Vector.to_list universals)))
         (PPrint.dot ^^ PPrint.blank 1 ^^ body)
-
-and path_to_doc path = to_doc (of_path path)
 
 and uv_to_doc uv = match !uv with
     | Unassigned (name, _) -> PPrint.qmark ^^ Name.to_doc name
     | Assigned t -> to_doc t
-
-and of_path = function
-    | AppP (callee, arg) -> App (of_path callee, of_path arg)
-    | BvP bv -> Bv bv
-    | UvP uv ->
-        (match !uv with
-        | Assigned typ -> typ
-        | Unassigned _ -> Uv uv)
-    | OvP ov -> Ov ov
-
-let to_abs typ = Exists (Vector.of_list [], Hole, typ)
 
 let rec coercion_to_doc = function
     | Refl typ -> to_doc typ
@@ -184,8 +163,12 @@ let rec coercion_to_doc = function
     | Trans (co, co') ->
         PPrint.infix 4 1 (PPrint.bquotes (PPrint.string "o"))
             (coercion_to_doc co) (andco_to_doc co')
-    | Comp (ctor_co, arg_co) -> PPrint.prefix 4 1 (ctorco_to_doc ctor_co) (argco_to_doc arg_co)
-    | Inst (co, arg) -> PPrint.infix 4 1 PPrint.at (instantiee_to_doc co) (to_doc arg)
+    | Comp (ctor_co, arg_cos) ->
+        PPrint.prefix 4 1 (ctorco_to_doc ctor_co)
+            (PPrint.separate_map (PPrint.break 1) argco_to_doc (Vector1.to_list arg_cos))
+    | Inst (co, args) ->
+        Vector1.fold_left (fun doc arg -> PPrint.infix 4 1 PPrint.at doc (to_doc arg))
+            (instantiee_to_doc co) args
     | AUse name -> Name.to_doc name
     | TypeCo co -> PPrint.brackets (PPrint.equals ^^ PPrint.break 1 ^^ (coercion_to_doc co))
     | Patchable {contents} -> coercion_to_doc contents
@@ -206,30 +189,17 @@ and instantiee_to_doc = function
     | (Symm _ | Trans _) as co -> PPrint.parens (coercion_to_doc co)
     | co -> coercion_to_doc co
 
+(* --- *)
+
+let to_abs typ = Exists (Vector.of_list [], Hole, typ)
+
 let freshen (name, kind) = (Name.freshen name, kind)
 
 let sibling = function
     | {contents = Unassigned (_, level)} -> ref (Unassigned (Name.fresh (), level))
     | {contents = Assigned _} -> failwith "unreachable"
 
-let rec expose_path' depth substitution = function
-    | AppP (callee, arg) ->
-        AppP (expose_path' depth substitution callee, expose_path' depth substitution arg)
-    | BvP {depth = depth'; sibli} as path ->
-        if depth' = depth
-        then Vector.get substitution sibli
-        else path
-    | (OvP _ | UvP _) as path -> path
-
-let rec expose_locator' depth substitution = function
-    | PiL (params, eff, codomain) ->
-        let depth = depth + 1 in
-        PiL (params, eff, expose_locator' depth substitution codomain)
-    | RecordL fields ->
-        RecordL (Vector.map (fun {label; typ} ->
-                                {label; typ = expose_locator' depth substitution typ}) fields)
-    | TypeL path -> TypeL (expose_path' depth substitution path)
-    | Hole -> Hole
+(* --- *)
 
 let rec expose_abs' depth substitution (Exists (params, locator, body)) =
     let depth = depth + 1 in
@@ -245,35 +215,33 @@ and expose' depth substitution = function
                                 {label; typ = expose' depth substitution typ}) fields)
     | Type typ -> Type (expose_abs' depth substitution typ)
     | Fn body -> Fn (expose' (depth + 1) substitution body)
-    | App (callee, arg) -> App (expose' depth substitution callee, expose' depth substitution arg)
-    | Bv {depth = depth'; sibli} as path ->
+    | App (callee, args) ->
+        let args = Vector1.map (expose' depth substitution) args in
+        (match expose' depth substitution callee with
+        | App (callee, args') -> App (callee, Vector1.append args' args) (* TODO: is this sufficient? *)
+        | callee -> App (callee, args))
+    | Bv {depth = depth'; sibli} as typ ->
         if depth' = depth
-        then of_path (Vector.get substitution sibli) (* OPTIMIZE *)
-        else path
+        then Vector.get substitution sibli
+        else typ
     | Uv {contents = Assigned typ} -> expose' depth substitution typ
     | (Use _ | Ov _ | Uv {contents = Unassigned _} | Prim _) as typ -> typ
+
+and expose_locator' depth substitution = function
+    | PiL (params, eff, codomain) ->
+        let depth = depth + 1 in
+        PiL (params, eff, expose_locator' depth substitution codomain)
+    | RecordL fields ->
+        RecordL (Vector.map (fun {label; typ} ->
+                                {label; typ = expose_locator' depth substitution typ}) fields)
+    | TypeL path -> TypeL (expose' depth substitution path)
+    | Hole -> Hole
 
 let expose_abs = expose_abs' 0
 let expose = expose' 0
 let expose_locator = expose_locator' 0
 
-let rec close_path' depth substitution = function
-    | AppP (callee, arg) ->
-        AppP (close_path' depth substitution callee, close_path' depth substitution arg)
-    | OvP ((name, _), _) as path ->
-        Name.Map.find_opt name substitution
-            |> Option.fold ~some: (fun sibli -> BvP {depth; sibli}) ~none: path
-    | (BvP _ | UvP _) as path -> path
-
-let rec close_locator' depth substitution = function
-    | PiL (params, eff, codomain) ->
-        let depth = depth + 1 in
-        PiL (params, eff, close_locator' depth substitution codomain)
-    | RecordL fields ->
-        RecordL (Vector.map (fun {label; typ} ->
-                                {label; typ = close_locator' depth substitution typ}) fields)
-    | TypeL path -> TypeL (close_path' depth substitution path)
-    | Hole -> Hole
+(* --- *)
 
 let rec close_abs' depth substitution (Exists (params, locator, body)) =
     let depth = depth + 1 in
@@ -289,12 +257,26 @@ and close' depth substitution = function
                                 {label; typ = close' depth substitution typ}) fields)
     | Type typ -> Type (close_abs' depth substitution typ)
     | Fn body -> Fn (close' (depth + 1) substitution body)
-    | App (callee, arg) -> App (close' depth substitution callee, close' depth substitution arg)
-    | Ov ((name, _), _) as typ ->
+    | App (callee, args) ->
+        let args = Vector1.map (close' depth substitution) args in
+        (match close' depth substitution callee with
+        | App (callee, args') -> App (callee, Vector1.append args' args) (* TODO: is this sufficient? *)
+        | callee -> App (callee, args))
+    | Ov ((name, _), _) as path ->
         Name.Map.find_opt name substitution
-            |> Option.fold ~some: (fun sibli -> Bv {depth; sibli}) ~none: typ
+            |> Option.fold ~some: (fun sibli -> Bv {depth; sibli}) ~none: path
     | Uv {contents = Assigned typ} -> close' depth substitution typ
     | (Use _ | Bv _ | Uv {contents = Unassigned _} | Prim _) as typ -> typ
+
+and close_locator' depth substitution = function
+    | PiL (params, eff, codomain) ->
+        let depth = depth + 1 in
+        PiL (params, eff, close_locator' depth substitution codomain)
+    | RecordL fields ->
+        RecordL (Vector.map (fun {label; typ} ->
+                                {label; typ = close_locator' depth substitution typ}) fields)
+    | TypeL path -> TypeL (close' depth substitution path)
+    | Hole -> Hole
 
 let close = close' 0
 let close_locator = close_locator' 0

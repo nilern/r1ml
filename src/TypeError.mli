@@ -9,7 +9,7 @@ type error =
     | SubEffect of effect * effect
     | SubType of typ * typ
     | Unify of typ * typ
-    | Unresolvable of FcType.path * typ
+    | Unresolvable of FcType.t * typ
     | Unsolvable of Residual.t
     | ImpureType of Ast.Term.expr
     | Escape of FcType.ov

@@ -55,13 +55,13 @@ let generate env binding =
 
 let reabstract env (Exists (params, locator, body)) =
     let params' = Vector.map (fun kind -> generate env (Name.fresh (), kind)) params in
-    let substitution = Vector.map (fun ov -> OvP ov) params' in
+    let substitution = Vector.map (fun ov -> Ov ov) params' in
     (params', expose_locator substitution locator, expose substitution body)
 
 let push_domain_skolems {scopes; current_level} (Exists (existentials, locator, domain)) =
     let level = current_level + 1 in
     let skolems = Vector.map (fun kind -> ((Name.fresh (), kind), level)) existentials in
-    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    let substitution = Vector.map (fun ov -> Ov ov) skolems in
     ( {scopes = Universal skolems :: scopes; current_level = level}
     , skolems, expose_locator substitution locator, expose substitution domain )
 
@@ -69,7 +69,7 @@ let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
     let level = current_level + 1 in
     let ebs = Vector.map (fun kind -> (Name.fresh (), kind)) existentials in
     let skolems = Vector.map (fun binding -> (binding, level)) ebs in
-    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    let substitution = Vector.map (fun ov -> Ov ov) skolems in
     ( { scopes = Universal skolems :: scopes (* HACK: Universal *)
       ; current_level = level }
     , ebs, expose_locator substitution locator, expose substitution body )
@@ -78,7 +78,7 @@ let push_arrow_skolems {scopes; current_level} universals domain eff codomain =
     let level = current_level + 1 in
     let ubs = Vector.map (fun kind -> (Name.fresh (), kind)) universals in
     let skolems = Vector.map (fun binding -> (binding, level)) ubs in
-    let substitution = Vector.map (fun ov -> OvP ov) skolems in
+    let substitution = Vector.map (fun ov -> Ov ov) skolems in
     ( {scopes = Universal skolems :: scopes; current_level = level}
     , ubs, expose substitution domain, eff, expose_abs substitution codomain )
 
@@ -92,12 +92,12 @@ let uv {current_level = level; _} binding =
 
 let instantiate_abs env (existentials, locator, body) =
     let uvs = Vector.map (fun _ -> uv env (Name.fresh ())) existentials in
-    let substitution = Vector.map (fun uv -> UvP uv) uvs in
+    let substitution = Vector.map (fun uv -> Uv uv) uvs in
     (uvs, expose_locator substitution locator, expose substitution body)
 
 let instantiate_arrow env universals domain_locator domain eff codomain =
     let uvs = Vector.map (fun _ -> uv env (Name.fresh())) universals in
-    let substitution = Vector.map (fun uv -> UvP uv) uvs in
+    let substitution = Vector.map (fun uv -> Uv uv) uvs in
     ( uvs, expose_locator substitution domain_locator, expose substitution domain, eff
     , expose_abs substitution codomain )
 

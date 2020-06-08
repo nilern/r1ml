@@ -21,11 +21,16 @@ let rec kindcheck env (typ : Ast.Type.t with_pos) =
                 match (eff, kindcheck env codomain) with
                 | (Pure, Exists (existentials, codomain_locator, concr_codo)) ->
                     let substitution = Vector.map (fun kind ->
-                        let kind =
-                            Vector.fold_right (fun arg_kind kind -> ArrowK (arg_kind, kind))
-                                              ukinds kind in
+                        let kind = match Vector1.of_vector ukinds with
+                            | Some ukinds ->
+                                (match kind with (* TODO: Is this sufficient to ensure unique reprs?: *)
+                                | ArrowK (ukinds', kind) -> ArrowK (Vector1.append ukinds' ukinds, kind)
+                                | _ -> ArrowK (ukinds, kind))
+                            | None -> kind in
                         let ov = Env.generate env (Name.freshen name, kind) in
-                        Vector.fold_left (fun path arg -> AppP (path, OvP arg)) (OvP ov) universals
+                        (match Vector1.of_vector universals with
+                        | Some universals -> App (Ov ov, Vector1.map (fun ov -> Ov ov) universals)
+                        | None -> Ov ov)
                     ) existentials in
                     ( expose_locator substitution codomain_locator
                     , to_abs (expose substitution concr_codo) )
@@ -51,7 +56,7 @@ let rec kindcheck env (typ : Ast.Type.t with_pos) =
         | Ast.Type.Path expr ->
             (match C.typeof env {typ with v = expr} with
             | {term = _; typ = proxy_typ; eff = Pure} ->
-                (match M.focalize typ.pos env proxy_typ (TypeL (UvP (Env.uv env (Name.fresh ())))) with
+                (match M.focalize typ.pos env proxy_typ (TypeL (Uv (Env.uv env (Name.fresh ())))) with
                 | (_, Type typ) ->
                     let (_, locator, typ) = Env.reabstract env typ in
                     (locator, typ)
@@ -65,7 +70,7 @@ let rec kindcheck env (typ : Ast.Type.t with_pos) =
 
         | Ast.Type.Type ->
             let ov = Env.generate env (Name.fresh (), TypeK) in
-            (TypeL (OvP ov), Type (to_abs (Ov ov)))
+            (TypeL (Ov ov), Type (to_abs (Ov ov)))
 
         | Ast.Type.Prim pt -> (Hole, Prim pt)
 
@@ -86,13 +91,13 @@ and whnf env typ =
     let (>>=) = Option.bind in
 
     let rec eval = function
-        | FcType.App (callee, arg) ->
+        | FcType.App (callee, args) ->
             eval callee >>= fun (callee, callee_co) ->
-            apply callee arg |> Option.map (fun (typ, co) ->
+            apply callee args |> Option.map (fun (typ, co) ->
             ( typ
             , match (callee_co, co) with
-              | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, arg)))
-              | (Some callee_co, None) -> Some (Inst (callee_co, arg))
+              | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, args)))
+              | (Some callee_co, None) -> Some (Inst (callee_co, args))
               | (None, Some co) -> Some co
               | (None, None) -> None ))
         | Fn _ as typ -> Some (typ, None)
@@ -114,11 +119,9 @@ and whnf env typ =
         | Bv _ -> failwith "unreachable: `Bv` in `whnf`"
         | Use _ -> failwith "unreachable: `Use` in `whnf`"
 
-    and apply callee arg = match callee with
-        | Fn body ->
-            let substitution = Vector.singleton (UvP {contents = Assigned arg}) in (* HACK *)
-            eval (expose substitution body)
-        | Ov _ | App _ -> Some (FcType.App (callee, arg), None)
+    and apply callee args = match callee with
+        | Fn body -> eval (expose (Vector1.to_vector args) body)
+        | Ov _ | App _ -> Some (FcType.App (callee, args), None)
         | Uv uv ->
             (match !uv with
             | Unassigned _ -> None

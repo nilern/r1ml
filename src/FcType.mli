@@ -1,7 +1,7 @@
 module Effect = Ast.Effect
 
 type kind
-    = ArrowK of kind * kind
+    = ArrowK of kind Vector1.t * kind
     | TypeK
 
 type bv = {depth : int; sibli : int}
@@ -28,11 +28,11 @@ and abs = Exists of kind Vector.t * locator * t
 and t =
     | Pi of kind Vector.t * locator * t * Effect.t * abs
     | Record of t field Vector.t
-    | Fn of t
-    | App of t * t
     | Type of abs
-    | Use of binding
+    | Fn of t
+    | App of t * t Vector1.t
     | Bv of bv
+    | Use of binding
     | Ov of ov
     | Uv of uv
     | Prim of Prim.t
@@ -40,24 +40,17 @@ and t =
 and locator =
     | PiL of kind Vector.t * Effect.t * locator
     | RecordL of locator field Vector.t
-    | TypeL of path
+    | TypeL of t
     | Hole
 
 and 'a field = {label : string; typ : 'a}
-
-(* TODO: Have just one notion of (applied) type variables / paths: *)
-and path =
-    | AppP of path * path
-    | BvP of bv
-    | OvP of ov
-    | UvP of uv
 
 and coercion =
     | Refl of typ
     | Symm of coercion
     | Trans of coercion * coercion
-    | Comp of coercion * coercion
-    | Inst of coercion * typ
+    | Comp of coercion * coercion Vector1.t
+    | Inst of coercion * typ Vector1.t
     | AUse of Name.t
     | TypeCo of coercion
     | Patchable of coercion ref
@@ -68,21 +61,19 @@ and template = locator
 val kind_to_doc : kind -> PPrint.document
 val binding_to_doc : binding -> PPrint.document
 val abs_to_doc : abs -> PPrint.document
-val universal_to_doc : binding Vector.t -> PPrint.document -> PPrint.document
+val universal_to_doc : kind Vector.t -> PPrint.document -> PPrint.document
 val to_doc : t -> PPrint.document
 val coercion_to_doc : coercion -> PPrint.document
 val locator_to_doc : locator -> PPrint.document
-val path_to_doc : path -> PPrint.document
 
-val of_path : path -> t
 val to_abs : t -> abs
 
 val freshen : binding -> binding
 val sibling : uv -> uv
 
-val expose_abs : path Vector.t -> abs -> abs
-val expose : path Vector.t -> t -> t
-val expose_locator : path Vector.t -> locator -> locator
+val expose_abs : t Vector.t -> abs -> abs
+val expose : t Vector.t -> t -> t
+val expose_locator : t Vector.t -> locator -> locator
 
 val close_abs : int Name.Map.t -> abs -> abs
 val close : int Name.Map.t -> t -> t

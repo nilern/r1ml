@@ -11,7 +11,10 @@ let to_list = Array.to_list
 let fold_left = Array.fold_left
 let fold_right = Array.fold_right
 let for_all = Array.for_all
+let exists = Array.exists
 let map = Array.map
+let mapi = Array.mapi
+let map2 = Array.map2
 let iter = Array.iter
 
 let find_opt pred xs =
@@ -33,6 +36,8 @@ let find pred xs = match find_opt pred xs with
 let split vec =
     ( Array.init (length vec) (fun i -> fst (get vec i))
     , Array.init (length vec) (fun i -> snd (get vec i)) )
+
+let append = Array.append
 
 let fold_left2 f acc xs ys =
     let len = length xs in

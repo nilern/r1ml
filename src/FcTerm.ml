@@ -12,7 +12,7 @@ type expr
     | App of expr with_pos * typ Vector.t * expr with_pos
     | Letrec of def Vector1.t * expr with_pos
     | LetType of FcType.binding Vector1.t * expr with_pos
-    | Axiom of (Name.t * FcType.binding Vector.t * typ * typ) Vector1.t * expr with_pos
+    | Axiom of (Name.t * FcType.kind Vector.t * typ * typ) Vector1.t * expr with_pos
     | Cast of expr with_pos * coercion
     | Pack of typ Vector1.t * expr with_pos
     | Unpack of FcType.binding Vector1.t * lvalue * expr with_pos * expr with_pos
