@@ -17,6 +17,7 @@ val exists : ('a -> bool) -> 'a t -> bool
 val map : ('a -> 'b) -> 'a t -> 'b t
 val mapi : (int -> 'a -> 'b) -> 'a t -> 'b t
 val map2 : ('a -> 'b -> 'c) -> 'a t -> 'b t -> 'c t
+val iter : ('a -> unit) -> 'a t -> unit
 
 val fold_left2 : ('a -> 'b -> 'c -> 'a) -> 'a -> 'b t -> 'c t -> 'a
 

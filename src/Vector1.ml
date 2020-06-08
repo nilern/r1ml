@@ -25,6 +25,7 @@ let exists = Vector.exists
 let map = Vector.map
 let mapi = Vector.mapi
 let map2 = Vector.map2
+let iter = Vector.iter
 
 let fold_left2 = Vector.fold_left2
 

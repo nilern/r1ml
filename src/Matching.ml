@@ -241,7 +241,7 @@ and subtype pos env typ locator super : coercer matching =
         | (Type (Exists (existentials, _, carrie) as abs_carrie), _) -> (match super with
             | Type abs_carrie' ->
                 (match locator with (* FIXME: Could also be App(Ov ov, ... with axiom for ov in scope: *)
-                | TypeL (App (Uv ({contents = Unassigned (_, level)} as uv), args) as path) ->
+                | TypeL (App (Uv ({contents = Unassigned (_, level)} as uv), args)) ->
                     if Vector.length existentials = 0 then begin
                         let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
                             match arg with
@@ -252,11 +252,10 @@ and subtype pos env typ locator super : coercer matching =
                         let max_uv_level = match Vector1.get args 0 with
                             | Ov (_, level') -> level' - 1
                             | _ -> failwith "unreachable: non-ov path arg in path locator" in
-                        if check_uv_assignee pos env uv level max_uv_level impl then begin
-                            uv := Assigned impl;
-                            { coercion = TyperSigs.Cf (fun _ -> {v = Proxy abs_carrie'; pos})
-                            ; residual = empty }
-                        end else raise (TypeError (pos, Unresolvable (path, impl)))
+                        check_uv_assignee pos env uv level max_uv_level impl;
+                        uv := Assigned impl;
+                        { coercion = TyperSigs.Cf (fun _ -> {v = Proxy abs_carrie'; pos})
+                        ; residual = empty }
                     end else raise (TypeError (pos, Polytype abs_carrie))
 
                 | _ -> (* TODO: Use unification (?) *)
@@ -355,14 +354,9 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Uv uv, typ') | (typ', Uv uv) ->
         (match !uv with
         | Unassigned (_, level) ->
-            if check_uv_assignee pos env uv level Int.max_int typ' then begin
-                uv := Assigned typ';
-                {coercion = None; residual = empty}
-            end else begin
-                let patchable = ref (Refl typ') in
-                { coercion = Some (FcType.Patchable patchable)
-                ; residual = Some (Unify (typ, typ', patchable)) }
-            end
+            check_uv_assignee pos env uv level Int.max_int typ';
+            uv := Assigned typ';
+            {coercion = None; residual = empty}
         | Assigned _ -> failwith "unreachable: Assigned `typ` in `unify_whnf`")
 
     | (Type carrie, _) -> (match typ' with
@@ -412,52 +406,43 @@ and unify_whnf pos env (typ : typ) (typ' : typ) : coercion option matching =
     | (Bv _, _) -> failwith "unreachable: Bv in unify_whnf"
     | (Use _, _) -> failwith "unreachable: Use in unify_whnf"
 
-and check_uv_assignee_abs pos env uv level max_uv_level (Exists (existentials, _, body) as typ) =
-    if Vector.length existentials = 0
-    then check_uv_assignee pos env uv level max_uv_level body
-    else raise (TypeError (pos, Polytype typ)) (* not a monotype *)
-
 (* Monotype check, occurs check, ov escape check, HKT capturability check and uv level updates.
    Complected for speed. *)
 and check_uv_assignee pos env uv level max_uv_level typ =
-    let check = function
-        | Uv uv' ->
-            if uv = uv'
-            then raise (TypeError (pos, Occurs (uv, typ)))
-            else
-                (match !uv' with
-                | Unassigned (name, level') ->
-                    if level' <= level
-                    then true
-                    else
-                        if level' <= max_uv_level
-                        then (uv' := Unassigned (name, level); true) (* hoist *)
-                        else raise (TypeError (pos, IncompleteImpl (uv, uv')))
-                | Assigned _ -> failwith "unreachable: Assigned `uv'` in `check_uv_assignee`")
-        | Ov ((_, level') as ov) ->
-            if level' <= level
-            then true
-            else raise (TypeError (pos, Escape ov))
-        | Fn body -> check_uv_assignee pos env uv level max_uv_level body
+    let rec check_abs (Exists (existentials, _, body) as typ) =
+        if Vector.length existentials = 0
+        then check body
+        else raise (TypeError (pos, Polytype typ))
+
+    and check = function
         | Pi (universals, _, domain, _, codomain) ->
             if Vector.length universals = 0
-            then check_uv_assignee pos env uv level max_uv_level domain
-                && check_uv_assignee_abs pos env uv level max_uv_level codomain
+            then (check domain; check_abs codomain)
             else raise (TypeError (pos, Polytype (to_abs typ)))
-        | Record fields ->
-            fields |> Vector.for_all (fun {label = _; typ} ->
-                check_uv_assignee pos env uv level max_uv_level typ
-            )
-        | Type carrie -> check_uv_assignee_abs pos env uv level max_uv_level carrie
-        | App (callee, args) ->
-            check_uv_assignee pos env uv level max_uv_level callee
-                && Vector1.for_all (check_uv_assignee pos env uv level max_uv_level) args
-        | Bv _ | Prim _ -> true
-        | Use _ -> failwith "unreachable: `Use` in `check_uv_assignee`" in
-
-    match E.whnf env typ with
-    | Some (typ, _) -> check typ
-    | None -> false (* FIXME: This should not cause residual, we can still check the callee uv etc. *)
+        | Record fields -> Vector.iter (fun {label = _; typ} -> check typ) fields
+        | Type carrie -> check_abs carrie
+        | Fn body -> check body
+        | App (callee, args) -> check callee; Vector1.iter check args
+        | Ov ((_, level') as ov) ->
+            (match Env.get_implementation env ov with
+            | Some (_, _, uv') -> check (Uv uv')
+            | None ->
+                if level' <= level
+                then ()
+                else raise (TypeError (pos, Escape ov)))
+        | Uv uv' ->
+            (match !uv' with
+            | Unassigned (name, level') ->
+                if uv = uv'
+                then raise (TypeError (pos, Occurs (uv, typ)))
+                else if level' <= level
+                then ()
+                else if level' <= max_uv_level
+                then uv' := Unassigned (name, level) (* hoist *)
+                else raise (TypeError (pos, IncompleteImpl (uv, uv')))
+            | Assigned typ -> check typ)
+        | Bv _ | Use _ | Prim _ -> () in
+    check typ
 
 (* # Constraint Solving *)
 
