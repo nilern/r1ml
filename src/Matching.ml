@@ -240,23 +240,33 @@ and subtype pos env typ locator super : coercer matching =
 
         | (Type (Exists (existentials, _, carrie) as abs_carrie), _) -> (match super with
             | Type abs_carrie' ->
-                (match locator with (* FIXME: Could also be App(Ov ov, ... with axiom for ov in scope: *)
-                | TypeL (App (Uv ({contents = Unassigned (_, level)} as uv), args)) ->
-                    if Vector.length existentials = 0 then begin
-                        let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
-                            match arg with
-                            | Ov ((name, _), _) -> (i + 1, Name.Map.add name i substitution)
-                            | _ -> failwith "unreachable: non-ov path arg in path locator"
-                        ) (0, Name.Map.empty) args in
-                        let impl = FcType.Fn (close substitution carrie) in
-                        let max_uv_level = match Vector1.get args 0 with
-                            | Ov (_, level') -> level' - 1
-                            | _ -> failwith "unreachable: non-ov path arg in path locator" in
-                        check_uv_assignee pos env uv level max_uv_level impl;
-                        uv := Assigned impl;
-                        { coercion = TyperSigs.Cf (fun _ -> {v = Proxy abs_carrie'; pos})
-                        ; residual = empty }
-                    end else raise (TypeError (pos, Polytype abs_carrie))
+                (match locator with
+                | TypeL (App (callee, args)) ->
+                    (match E.whnf env callee with
+                    | Some (Uv ({contents = Unassigned (_, level)} as uv), _) ->
+                        if Vector.length existentials = 0 then begin
+                            let (_, substitution) = Vector1.fold_left (fun (i, substitution) arg ->
+                                match arg with
+                                | Ov ((name, _), _) -> (i + 1, Name.Map.add name i substitution)
+                                | _ -> failwith "unreachable: non-ov path arg in path locator"
+                            ) (0, Name.Map.empty) args in
+                            let impl = FcType.Fn (close substitution carrie) in
+                            let max_uv_level = match Vector1.get args 0 with
+                                | Ov (_, level') -> level' - 1
+                                | _ -> failwith "unreachable: non-ov path arg in path locator" in
+                            check_uv_assignee pos env uv level max_uv_level impl;
+                            uv := Assigned impl;
+                            { coercion = TyperSigs.Cf (fun _ -> {v = Proxy abs_carrie'; pos})
+                            ; residual = empty }
+                        end else raise (TypeError (pos, Polytype abs_carrie))
+
+                    | _ -> (* TODO: Use unification (?) *)
+                        let {coercion = _; residual} =
+                            subtype_abs pos env abs_carrie Hole abs_carrie' in
+                        let {coercion = _; residual = residual'} =
+                            subtype_abs pos env abs_carrie' Hole abs_carrie in
+                        { coercion = Cf (fun _ -> {v = Proxy abs_carrie'; pos})
+                        ; residual = combine residual residual' })
 
                 | _ -> (* TODO: Use unification (?) *)
                     let {coercion = _; residual} =
