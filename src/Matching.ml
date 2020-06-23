@@ -67,6 +67,24 @@ let rec focalize pos env typ (template : FcType.template) : coercer * typ =
         , typ )
     | None -> failwith "unreachable: `whnf` failed in `focalize`."
 
+and focalize_locator locator = function
+    | Pi _ ->
+        (match locator with
+        | PiL _ -> locator
+        | Hole -> PiL (Vector.of_list [], Impure, Hole)
+        | _ -> failwith "unreachable: `Pi` locator")
+    | Record _ ->
+        (match locator with
+        | RecordL _ -> locator
+        | Hole -> RecordL (Vector.of_list [])
+        | _ -> failwith "unreachable: `Record` locator")
+    | Type _ ->
+        (match locator with
+        | TypeL _ -> locator
+        | Hole -> TypeL (Prim Int) (* HACK *)
+        | _ -> failwith "unreachable: `Type` locator")
+    | _ -> locator (* HACK? *)
+
 (* # Subtyping *)
 
 and sub_eff pos eff eff' = match (eff, eff') with
@@ -132,6 +150,7 @@ and subtype_abs pos env (typ : abs) locator (super : abs) : coercer matching =
             {coercion = Cf (fun v -> {pos; v = Pack (uvs, coerce v)}); residual}
         | None -> subtype pos env typ locator super)
 
+(* FIXME: Reinstate `occ` plumbing. ATM won't create cycle but will try to create infinite tree. *)
 and subtype pos env typ locator super : coercer matching =
     let empty = ResidualMonoid.empty in
     let combine = ResidualMonoid.combine in
@@ -185,7 +204,6 @@ and subtype pos env typ locator super : coercer matching =
             | Pi (universals', _, domain', eff', codomain') ->
                 let codomain_locator = match locator with
                     | PiL (_, _, codomain_locator) -> codomain_locator
-                    | Hole -> Hole
                     | _ -> failwith "unreachable: function locator" in
                 let (env, universals', domain', eff', codomain_locator, codomain') =
                     Env.push_arrow_skolems env universals' domain' eff' codomain_locator codomain' in
@@ -216,7 +234,6 @@ and subtype pos env typ locator super : coercer matching =
             | FcType.Record super_fields ->
                 let locator_fields = match locator with
                     | RecordL fields -> fields
-                    | Hole -> Vector.of_list []
                     | _ -> failwith "unreachable: record locator" in
                 let name = Name.fresh () in
                 let selectee = {name; typ = typ} in
@@ -268,13 +285,15 @@ and subtype pos env typ locator super : coercer matching =
                         { coercion = Cf (fun _ -> {v = Proxy abs_carrie'; pos})
                         ; residual = combine residual residual' })
 
-                | _ -> (* TODO: Use unification (?) *)
+                | TypeL _ -> (* TODO: Use unification (?) *)
                     let {coercion = _; residual} =
                         subtype_abs pos env abs_carrie Hole abs_carrie' in
                     let {coercion = _; residual = residual'} =
                         subtype_abs pos env abs_carrie' Hole abs_carrie in
                     { coercion = Cf (fun _ -> {v = Proxy abs_carrie'; pos})
-                    ; residual = combine residual residual' })
+                    ; residual = combine residual residual' }
+
+                | _ -> failwith "unreachable: `Type` locator")
             | _ -> raise (TypeError (pos, SubType (typ, super))))
 
         | (App _, _) -> (match super with
@@ -309,6 +328,7 @@ and subtype pos env typ locator super : coercer matching =
     let res =
         E.whnf env typ >>= fun (typ', co) ->
         E.whnf env super |> Option.map (fun (super', co') ->
+            let locator = focalize_locator locator super' in
             let {coercion = Cf coerce; residual} = subtype_whnf typ' locator super' in
             { coercion =
                 (match (co, co') with
