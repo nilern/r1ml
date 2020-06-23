@@ -5,35 +5,33 @@ open TypeError
 type 'a with_pos = 'a Ast.with_pos
 
 type val_binder =
-    | WhiteDecl of Name.t Ast.Type.decl
-    | GreyDecl of Name.t Ast.Type.decl
-    | BlackDecl of lvalue * locator
-    | WhiteDef of Ast.Term.lvalue * Ast.Term.expr with_pos
-    | GreyDef of Ast.Term.lvalue * Ast.Term.expr with_pos
-    | BlackAnn of lvalue * Ast.Term.expr with_pos * ov Vector.t * locator * coercion option
-    | BlackUnn of lvalue * expr with_pos * Effect.t
+    | WhiteDecl of Name.t * Ast.Type.t with_pos
+    | GreyDecl of Name.t * Ast.Type.t with_pos
+    | BlackDecl of lvalue * ov Vector.t * locator
+    | WhiteDef of Name.t * Ast.Term.expr with_pos
+    | GreyDef of Name.t * Ast.Term.expr with_pos
+    | BlackDef of lvalue * Effect.t * expr with_pos
 
 type scope
     = Repl of (Name.t, val_binder ref) Hashtbl.t
-    | Existential of binding list ref * level
-    | Universal of ov Vector.t
+    | Hoisting of binding list ref * level
+    | Rigid of ov Vector.t
     | Axiom of (Name.t * ov * uv) Name.Map.t
     | Fn of val_binder ref
-    | Sig of val_binder ref Name.Map.t
-    | Struct of val_binder ref Name.Map.t
+    | Rec of val_binder ref Name.Map.t
 
 type t = {scopes : scope list; current_level : level}
 
 let initial_level = 1
 
 let interactive () =
-    { scopes = [Repl (Hashtbl.create 0); Existential (ref [], initial_level)]
+    { scopes = [Repl (Hashtbl.create 0); Hoisting (ref [], initial_level)]
     ; current_level = initial_level }
 
-let repl_define env ({name; _} as binding) =
+let repl_define env ({name; typ = _} as lvalue) =
     let rec define scopes =
         match scopes with
-        | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (BlackDecl (binding, Hole)))
+        | Repl kvs :: _ -> Hashtbl.replace kvs name (ref (BlackDecl (lvalue, Vector.of_list [], Hole)))
         | _ :: scopes' -> define scopes'
         | [] -> failwith "Typer.Env.repl_define: non-interactive type environment"
     in define env.scopes
@@ -41,16 +39,16 @@ let repl_define env ({name; _} as binding) =
 let push_existential {scopes; current_level} =
     let bindings = ref [] in
     let current_level = current_level + 1 in
-    ( {scopes = Existential (bindings, current_level) :: scopes; current_level}
+    ( {scopes = Hoisting (bindings, current_level) :: scopes; current_level}
     , bindings )
 
 let generate env binding =
     let rec generate = function
-        | Existential (bindings, level) :: _ ->
+        | Hoisting (bindings, level) :: _ ->
             bindings := binding :: !bindings;
             (binding, level)
         | _ :: scopes' -> generate scopes'
-        | [] -> failwith "Typer.Env.generate: missing root Existential scope"
+        | [] -> failwith "Typer.Env.generate: missing root Hoisting scope"
     in generate env.scopes
 
 let reabstract env (Exists (params, locator, body)) =
@@ -62,7 +60,7 @@ let push_domain_skolems {scopes; current_level} (Exists (existentials, locator, 
     let level = current_level + 1 in
     let skolems = Vector.map (fun kind -> ((Name.fresh (), kind), level)) existentials in
     let substitution = Vector.map (fun ov -> Ov ov) skolems in
-    ( {scopes = Universal skolems :: scopes; current_level = level}
+    ( {scopes = Rigid skolems :: scopes; current_level = level}
     , skolems, expose_locator substitution locator, expose substitution domain )
 
 let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
@@ -70,7 +68,7 @@ let push_abs_skolems {scopes; current_level} (existentials, locator, body) =
     let ebs = Vector.map (fun kind -> (Name.fresh (), kind)) existentials in
     let skolems = Vector.map (fun binding -> (binding, level)) ebs in
     let substitution = Vector.map (fun ov -> Ov ov) skolems in
-    ( { scopes = Universal skolems :: scopes (* HACK: Universal *)
+    ( { scopes = Rigid skolems :: scopes
       ; current_level = level }
     , ebs, expose_locator substitution locator, expose substitution body )
 
@@ -79,14 +77,14 @@ let push_arrow_skolems {scopes; current_level} universals domain eff codomain_lo
     let ubs = Vector.map (fun kind -> (Name.fresh (), kind)) universals in
     let skolems = Vector.map (fun binding -> (binding, level)) ubs in
     let substitution = Vector.map (fun ov -> Ov ov) skolems in
-    ( {scopes = Universal skolems :: scopes; current_level = level}
+    ( {scopes = Rigid skolems :: scopes; current_level = level}
     , ubs, expose substitution domain, eff
     , expose_locator substitution codomain_locator, expose_abs substitution codomain )
 
 let push_skolems {scopes; current_level} bindings =
     let level = current_level + 1 in
     let skolems = Vector.map (fun binding -> (binding, level)) (Vector1.to_vector bindings) in
-    {scopes = Universal skolems :: scopes; current_level = level}
+    {scopes = Rigid skolems :: scopes; current_level = level}
 
 let uv {current_level = level; _} binding =
     ref (Unassigned (binding, level))
@@ -102,20 +100,23 @@ let instantiate_arrow env universals domain_locator domain eff codomain =
     ( uvs, expose_locator substitution domain_locator, expose substitution domain, eff
     , expose_abs substitution codomain )
 
-let push_domain env binding locator =
-    {env with scopes = Fn (ref (BlackDecl (binding, locator))) :: env.scopes}
+let push_domain env lvalue locator =
+    {env with scopes = Fn (ref (BlackDecl (lvalue, Vector.of_list [], locator))) :: env.scopes}
 
 let push_sig env bindings =
-    let bindings = Vector.fold_left (fun bindings ({name; _} as binding : Name.t Ast.Type.decl) ->
-        Name.Map.add name (ref (WhiteDecl binding)) bindings
+    let bindings = Vector.fold_left (fun bindings {Ast.Type.name; typ} ->
+        Name.Map.add name (ref (WhiteDecl (name, typ))) bindings
     ) Name.Map.empty bindings in
-    {env with scopes = Sig bindings :: env.scopes}
+    {env with scopes = Rec bindings :: env.scopes}
 
 let push_struct env bindings =
-    let bindings = Vector.fold_left (fun bindings ({Ast.Term.pat = name; _} as binding, expr) ->
-        Name.Map.add name (ref (WhiteDef (binding, expr))) bindings
+    let bindings = Vector.fold_left (fun bindings -> function
+        | ({Ast.Term.pat = name; ann = Some typ}, _) ->
+            Name.Map.add name (ref (WhiteDecl (name, typ))) bindings
+        | ({Ast.Term.pat = name; ann = None}, expr) ->
+            Name.Map.add name (ref (WhiteDef (name, expr))) bindings
     ) Name.Map.empty bindings in
-    {env with scopes = Struct bindings :: env.scopes}
+    {env with scopes = Rec bindings :: env.scopes}
 
 let push_axioms env axioms =
     let bindings = Vector1.fold_left (fun bindings ((_, ((k, _), _), _) as v) ->
@@ -129,16 +130,16 @@ let get pos env name =
             (match Hashtbl.find_opt kvs name with
             | Some def -> ({env with scopes}, def)
             | None -> get scopes')
-        | Fn ({contents = BlackDecl ({name = name'; _}, _)} as def) :: scopes' ->
+        | Fn ({contents = BlackDecl ({name = name'; typ = _}, _, _)} as def) :: scopes' ->
             if name' = name
             then ({env with scopes}, def)
             else get scopes'
         | Fn _ :: _ -> failwith "unreachable: Fn scope with non-BlackDecl in `Env.get`"
-        | (Sig kvs | Struct kvs) :: scopes' ->
+        | Rec kvs :: scopes' ->
             (match Name.Map.find_opt name kvs with
             | Some def -> ({env with scopes}, def)
             | None -> get scopes')
-        | (Existential _ | Universal _ | Axiom _) :: scopes' -> get scopes'
+        | (Hoisting _ | Rigid _ | Axiom _) :: scopes' -> get scopes'
         | [] -> raise (TypeError (pos, Unbound name))
     in get env.scopes
 

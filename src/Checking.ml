@@ -163,81 +163,60 @@ and implement env ((_, _, body) as typ) (expr : Ast.Term.expr with_pos) =
 
 (* # Definitions and Statements *)
 
-and deftype env (pos, {Ast.Term.pat = name; _}, _) = (* FIXME: When GreyDecl has been encountered *)
+and deftype env (pos, {Ast.Term.pat = name; _}, expr) = (* FIXME: When GreyDecl has been encountered *)
     let _ = lookup pos env name in
     match Env.get pos env name with
-    | (env, {contents = BlackAnn ({typ; _} as lvalue, expr, existentials, locator, coercion)}) ->
+    | (env, {contents = BlackDecl ({name = _; typ} as lvalue, existentials, locator)}) ->
         let {TyperSigs.term = expr; typ; eff} = implement env (existentials, locator, typ) expr in
-        let expr = match coercion with
-            | Some coercion -> {expr with v = Cast (expr, coercion)}
-            | None -> expr in
         {term = (pos, lvalue, expr); typ; eff}
-    | (_, {contents = BlackUnn ({typ; _} as lvalue, expr, eff)}) ->
+    | (_, {contents = BlackDef ({name = _; typ} as lvalue, eff, expr)}) ->
         {term = (pos, lvalue, expr); typ; eff}
-    | (_, {contents = WhiteDecl _ | GreyDecl _ | BlackDecl _ | WhiteDef _ | GreyDef _; _}) ->
+    | (_, {contents = WhiteDecl _ | GreyDecl _ | WhiteDef _ | GreyDef _; _}) ->
         failwith "unreachable: decl or non-black binding in `deftype`"
 
 (* # Lookup *)
 
 and lookup pos env name =
     match Env.get pos env name with
-    | (env, ({contents = Env.WhiteDecl ({name; typ} as decl)} as binding)) ->
-        binding := Env.GreyDecl decl;
+    | (env, ({contents = Env.WhiteDecl (_, typ)} as binding)) ->
+        binding := Env.GreyDecl (name, typ);
         let typ = E.kindcheck env typ in
         (match !binding with
         | Env.GreyDecl _ ->
-            let (_, locator, typ) = Env.reabstract env typ in
+            let (existentials, locator, typ) = Env.reabstract env typ in
             let lvalue = {name; typ} in
-            binding := Env.BlackDecl (lvalue, locator);
+            binding := Env.BlackDecl (lvalue, existentials, locator);
             (locator, lvalue)
-        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, _) ->
+        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, _, _) ->
             let Exists (existentials, _, body) = typ in
             if Vector.length existentials = 0 then begin
                 let _ = M.solving_unify pos env body typ' in
                 (Hole, lvalue)
             end else raise (TypeError (pos, PolytypeInference typ))
-        | _ -> failwith "unreachable: non-decl from decl `lookup`")
+        | _ -> failwith "unreachable")
     | (env, ({contents = Env.GreyDecl _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
-        binding := Env.BlackDecl (lvalue, Hole);
+        binding := Env.BlackDecl (lvalue, Vector.of_list [], Hole);
         (Hole, lvalue)
-    | (_, {contents = Env.BlackDecl (lvalue, locator)}) -> (locator, lvalue)
+    | (_, {contents = Env.BlackDecl (lvalue, _, locator)}) -> (locator, lvalue)
 
-    | (env, ({contents = Env.WhiteDef ({pat = name; ann = Some typ} as lvalue, expr)} as binding)) ->
-        binding := Env.GreyDef (lvalue, expr);
-        let typ = E.kindcheck env typ in
-        (match !binding with
-        | Env.GreyDef _ ->
-            let (existentials, locator, typ) = Env.reabstract env typ in
-            let lvalue = {name; typ} in
-            binding := Env.BlackAnn (lvalue, expr, existentials, locator, None);
-            (locator, lvalue)
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, expr, existentials, locator, None) ->
-            let Exists (existentials', _, body) = typ in
-            if Vector.length existentials' = 0 then begin
-                let co = M.solving_unify pos env body typ' in
-                binding := Env.BlackAnn (lvalue, expr, existentials, locator, co);
-                (Hole, lvalue)
-            end else raise (TypeError (pos, PolytypeInference typ))
-        | _ -> failwith "unreachable: non-ann from ann `lookup`")
-    | (env, ({contents = Env.WhiteDef ({pat = name; ann = None} as lvalue, expr)} as binding)) ->
-        binding := Env.GreyDef (lvalue, expr);
+    | (env, ({contents = Env.WhiteDef (name, expr)} as binding)) ->
+        binding := Env.GreyDef (name, expr);
         let {TyperSigs.term = expr; typ; eff} = typeof env expr in
         (match !binding with
         | Env.GreyDef _ ->
             let lvalue = {name; typ} in
-            binding := Env.BlackUnn (lvalue, expr, eff);
+            binding := Env.BlackDef (lvalue, eff, expr);
             (Hole, lvalue)
-        | Env.BlackAnn ({name = _; typ = typ'} as lvalue, _, _, _, _) ->
+        | Env.BlackDecl ({name = _; typ = typ'} as lvalue, _, _) ->
             let Cf coerce = M.solving_subtype expr.pos env typ Hole typ' in
-            binding := Env.BlackUnn (lvalue, coerce expr, eff); (* FIXME: Coercing nontrivial `expr` *)
+            binding := Env.BlackDef (lvalue, eff, coerce expr); (* FIXME: Coercing nontrivial `expr` *)
             (Hole, lvalue)
-        | _ -> failwith "unreachable: non-unn from unn `lookup`")
-    | (env, ({contents = Env.GreyDef ({pat = name; ann = _}, expr)} as binding)) ->
+        | _ -> failwith "unreachable")
+    | (env, ({contents = Env.GreyDef _} as binding)) ->
         let lvalue = {name; typ = Uv (Env.uv env (Name.fresh ()))} in (* FIXME: uv level is wrong *)
-        binding := Env.BlackAnn (lvalue, expr, Vector.of_list [], Hole, None);
+        binding := Env.BlackDecl (lvalue, Vector.of_list [], Hole);
         (Hole, lvalue)
-    | (_, {contents = Env.BlackAnn (lvalue, _, _, locator, _)}) -> (locator, lvalue)
-    | (_, {contents = Env.BlackUnn (lvalue, _, _)}) -> (Hole, lvalue)
+    | (_, {contents = Env.BlackDef (lvalue, _, _)}) -> (Hole, lvalue)
 end
 
