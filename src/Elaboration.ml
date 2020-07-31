@@ -96,7 +96,7 @@ and whnf env typ =
             apply callee args |> Option.map (fun (typ, co) ->
             ( typ
             , match (callee_co, co) with
-              | (Some callee_co, Some co) -> Some (Trans (co, Inst (callee_co, args)))
+              | (Some callee_co, Some co) -> Some (Trans (Inst (callee_co, args), co))
               | (Some callee_co, None) -> Some (Inst (callee_co, args))
               | (None, Some co) -> Some co
               | (None, None) -> None ))
